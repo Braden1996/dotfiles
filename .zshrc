@@ -1,17 +1,14 @@
-source /usr/local/share/antigen/antigen.zsh
-
-# Swap out regular vim with neovim
-alias vim="nvim"
-alias vi="nvim"
-alias oldvim="vim"
-alias vimdiff='nvim -d'
+# nvim as default edtior
+export VISUAL="nvim"
+export EDITOR="nvim"
 
 # Handy aliases to edit common files
-alias zshx="vim ~/.zshrc"
-alias vimx="vim ~/.config/nvim/init.vim"
-alias oldvimx="vim ~/.vimrc"
-alias hyperx="vim ~/.hyper.js"
-alias gitx="vim ~/.gitconfig"
+alias zshx="${EDITOR} ~/.zshrc"
+alias nvimx="${EDITOR} ~/.config/nvim/init.vim"
+alias gitx="${EDITOR} ~/.gitconfig"
+alias hyperx="${EDITOR} ~/.hyper.js"
+
+source /usr/local/share/antigen/antigen.zsh
 
 # Load the oh-my-zsh's library.
 antigen use oh-my-zsh
@@ -43,10 +40,6 @@ antigen apply
 bindkey '^[[A' history-substring-search-up
 bindkey '^[[B' history-substring-search-down
 HISTORY_SUBSTRING_SEARCH_ENSURE_UNIQUE=1
-
-# vim as default edtior
-export VISUAL="nvim"
-export EDITOR="nvim"
 
 # Add git key
 ssh-add ~/.ssh/gitkey &> /dev/null
