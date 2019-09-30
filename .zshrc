@@ -14,9 +14,6 @@ set -o emacs
 # https://blog.callstack.io/supercharge-your-terminal-with-zsh-8b369d689770
 source <(antibody init)
 
-antibody bundle < ~/.zsh_plugins.txt
-antibody bundle denysdovhan/spaceship-prompt
-
 # Cache completions for faster start up
 autoload -Uz compinit
 typeset -i updated_at=$(date +'%j' -r ~/.zcompdump 2>/dev/null || stat -f '%Sm' -t '%j' ~/.zcompdump 2>/dev/null)
@@ -26,6 +23,9 @@ else
   compinit -C -i
 fi
 zmodload -i zsh/complist
+
+antibody bundle < ~/.zsh_plugins.txt
+antibody bundle denysdovhan/spaceship-prompt
 
 # Save history to disk
 HISTFILE=$HOME/.zsh_history
@@ -55,7 +55,13 @@ bindkey '^[[A' history-substring-search-up
 bindkey '^[[B' history-substring-search-down
 HISTORY_SUBSTRING_SEARCH_ENSURE_UNIQUE=1
 
+# Configure PyEnv
+if command -v pyenv 1>/dev/null 2>&1; then
+ eval "$(pyenv init -)"
+fi
+
 # Add git key
 ssh-add ~/.ssh/gitkey &> /dev/null
 
 [ -f /usr/local/etc/profile.d/autojump.sh ] && . /usr/local/etc/profile.d/autojump.sh
+eval "$(rbenv init -)"
