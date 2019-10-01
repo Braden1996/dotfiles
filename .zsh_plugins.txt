@@ -1,0 +1,9 @@
+zdharma/fast-syntax-highlighting
+zsh-users/zsh-autosuggestions
+zsh-users/zsh-history-substring-search
+zsh-users/zsh-completions
+robbyrussell/oh-my-zsh path:plugins/git
+robbyrussell/oh-my-zsh path:plugins/react-native
+
+# Doesn't work with Hyper and also needs `terminal-notifier` :(
+#marzocchi/zsh-notify
