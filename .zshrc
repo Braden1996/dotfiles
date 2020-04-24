@@ -25,7 +25,7 @@ fi
 zmodload -i zsh/complist
 
 antibody bundle < ~/.zsh_plugins.txt
-antibody bundle denysdovhan/spaceship-prompt
+eval "$(starship init zsh)"
 
 # Save history to disk
 HISTFILE=$HOME/.zsh_history
