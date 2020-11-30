@@ -2,11 +2,17 @@
 export VISUAL="nvim"
 export EDITOR="nvim"
 
+# Krypton
+export GPG_TTY=$(tty)
+
 # Handy aliases to edit common files
 alias zshx="${EDITOR} ~/.zshrc"
 alias nvimx="${EDITOR} ~/.config/nvim/init.vim"
 alias gitx="${EDITOR} ~/.gitconfig"
 alias hyperx="${EDITOR} ~/.hyper.js"
+
+alias oldls="ls"
+alias ls="exa --group-directories-first --icons"
 
 set -o emacs
 
@@ -33,6 +39,8 @@ HISTSIZE=100000
 SAVEHIST=$HISTSIZE
 
 # Configure how history is saved
+setopt histignorespace
+export HISTCONTROL=ignorespace
 setopt hist_ignore_all_dups # remove older duplicate entries from history
 setopt hist_reduce_blanks # remove superfluous blanks from history items
 setopt inc_append_history # save history entries as soon as they are entered
@@ -61,7 +69,24 @@ if command -v pyenv 1>/dev/null 2>&1; then
 fi
 
 # Add git key
-ssh-add ~/.ssh/gitkey &> /dev/null
+eval `ssh-agent -s` > /dev/null
 
 [ -f /usr/local/etc/profile.d/autojump.sh ] && . /usr/local/etc/profile.d/autojump.sh
 eval "$(rbenv init -)"
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "/usr/local/opt/nvm/nvm.sh" ] && . "/usr/local/opt/nvm/nvm.sh"  # This loads nvm
+[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && . "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
+
+# Added by Krypton
+export GPG_TTY=$(tty)
+
+# Ruby Env
+export PATH="$HOME/.rbenv/bin:$PATH"
+eval "$(rbenv init -)"
+
+# Added for Android SDK
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export PATH=$PATH:$ANDROID_HOME/emulator
+export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+export PATH=$PATH:$ANDROID_HOME/platform-tools

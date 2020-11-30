@@ -12,4 +12,13 @@
 [push]
 	default = current
 [commit]
-	gpgsign = false
+	gpgSign = true
+[gpg]
+	program = /usr/local/bin/krgpg
+[tag]
+	forceSignAnnotated = true
+[pull]
+	default = current
+
+[url "git@github.com:"]
+	insteadOf = https://github.com/
