@@ -20,10 +20,10 @@
 - [Introduction](#introduction-)
 - [Installation](#installation-)
 - [Applications](#applications-)
-    - [Quality of Life](#quality-of-life-)
-    - [Development](#development-)
-        - [iOS](#ios-)
-        - [Android](#android-)
+  - [Quality of Life](#quality-of-life-)
+  - [Development](#development-)
+    - [iOS](#ios-)
+    - [Android](#android-)
 
 ## Introduction 💪
 
@@ -42,6 +42,7 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
 ## Applications 🎁
 
 ### Quality of Life 🌅
+
 - Browser - Brave: `brew install brave-browser`
 - Password Manager - 1Password: `brew install 1password`
 - Spotlight - Raycast: `brew install raycast`
@@ -58,6 +59,7 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
 - Splash Screen - Brooklyn: `brew install brooklyn`
 
 ### Development 🏗
+
 - Terminal - Alacritty: `brew install alacritty`
     1. Install ZSH: `brew install zsh`
     1. Install tmux (session manager): `brew install tmux`
@@ -81,13 +83,16 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
     1. Tell Git to use GPG2: `git config --global gpg.program gpg2`
     1. [Follow instructions here](https://docs.github.com/en/github/authenticating-to-github/signing-commits).
 - Editor - Visual Studio Code: `brew install visual-studio-code`
+    - Settings [synced via GitHub](https://code.visualstudio.com/docs/editor/settings-sync).
 - Mobile Debugger - Flipper: `brew install flipper`
 
 #### iOS 🍎
+
 1. Install Xcode: [Download from App Store](https://apps.apple.com/gb/app/xcode/id497799835?mt=12)
 1. Install Cocoapods: `sduo gem install cocoapods`
 
 #### Android 🤖
+
 1. Install Java8: `brew install adoptopenjdk/openjdk/adoptopenjdk8`
 1. Install Android Studio: `brew install android-studio`
 1. Open Android Studio, then choose `Preferences...` from the menu bar. Go to `Appearance & behaviour` -> `System Settings` -> `Android SDK`. From here, select and install the following:
