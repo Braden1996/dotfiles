@@ -12,9 +12,10 @@
 [push]
 	default = current
 [commit]
-	gpgSign = true
+	# TODO: wait for libgcrypt Mac M1 build fix proposal
+	gpgSign = false
 [gpg]
-	program = /usr/local/bin/krgpg
+	program = gpg2
 [tag]
 	forceSignAnnotated = true
 [pull]

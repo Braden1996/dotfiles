@@ -1,92 +1,130 @@
-# nvim as default edtior
-export VISUAL="nvim"
-export EDITOR="nvim"
-
-# Krypton
-export GPG_TTY=$(tty)
-
 # Handy aliases to edit common files
 alias zshx="${EDITOR} ~/.zshrc"
-alias nvimx="${EDITOR} ~/.config/nvim/init.vim"
 alias gitx="${EDITOR} ~/.gitconfig"
-alias hyperx="${EDITOR} ~/.hyper.js"
 
-alias oldls="ls"
-alias ls="exa --group-directories-first --icons"
-
-set -o emacs
-
-# Heavy inspiration from:
-# https://blog.callstack.io/supercharge-your-terminal-with-zsh-8b369d689770
-source <(antibody init)
-
-# Cache completions for faster start up
-autoload -Uz compinit
-typeset -i updated_at=$(date +'%j' -r ~/.zcompdump 2>/dev/null || stat -f '%Sm' -t '%j' ~/.zcompdump 2>/dev/null)
-if [ $(date +'%j') != $updated_at ]; then
-  compinit -i
-else
-  compinit -C -i
-fi
-zmodload -i zsh/complist
-
-antibody bundle < ~/.zsh_plugins.txt
-eval "$(starship init zsh)"
-
-# Save history to disk
-HISTFILE=$HOME/.zsh_history
-HISTSIZE=100000
-SAVEHIST=$HISTSIZE
-
-# Configure how history is saved
-setopt histignorespace
-export HISTCONTROL=ignorespace
-setopt hist_ignore_all_dups # remove older duplicate entries from history
-setopt hist_reduce_blanks # remove superfluous blanks from history items
-setopt inc_append_history # save history entries as soon as they are entered
-setopt share_history # share history between different instances of the shell
-
-setopt auto_cd # cd by typing directory name if it's not a command
-setopt correct_all # autocorrect commands
-setopt auto_list # automatically list choices on ambiguous completion
-setopt auto_menu # automatically use menu completion
-setopt always_to_end # move cursor to end if word had one match
-zstyle ':completion:*' menu select # select completions with arrow keys
-zstyle ':completion:*' group-name '' # group results by category
-zstyle ':completion:::::' completer _expand _complete _ignored _approximate # enable approximate matches for completion
-
-bindkey '^[[3~' delete-char
-bindkey '^[3;5~' delete-char
-
-# For zsh-users/zsh-history-substring-search
-bindkey '^[[A' history-substring-search-up
-bindkey '^[[B' history-substring-search-down
-HISTORY_SUBSTRING_SEARCH_ENSURE_UNIQUE=1
-
-# Configure PyEnv
-if command -v pyenv 1>/dev/null 2>&1; then
- eval "$(pyenv init -)"
-fi
 
 # Add git key
+export GPG_TTY=$(tty)
 eval `ssh-agent -s` > /dev/null
 
-[ -f /usr/local/etc/profile.d/autojump.sh ] && . /usr/local/etc/profile.d/autojump.sh
-eval "$(rbenv init -)"
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "/usr/local/opt/nvm/nvm.sh" ] && . "/usr/local/opt/nvm/nvm.sh"  # This loads nvm
-[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && . "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
+ANTIGEN_PATH=/opt/homebrew/share/antigen/antigen.zsh
+if [ ! -f "$ANTIGEN_PATH" ]; then
+    echo "Warning: antigen not found in path."
+else
+  source $ANTIGEN_PATH
 
-# Added by Krypton
-export GPG_TTY=$(tty)
+  # Load bundles from the default repo (oh-my-zsh)
+  antigen use oh-my-zsh
+  antigen bundle git
+  antigen bundle heroku
+  antigen bundle pip
+  antigen bundle lein
+  antigen bundle command-not-found
+  antigen bundle autojump
+  antigen bundle brew
+  antigen bundle common-aliases
+  antigen bundle compleat
+  antigen bundle git-extras
+  antigen bundle git-flow
+  antigen bundle npm
+  antigen bundle osx
+  antigen bundle web-search
+  antigen bundle z
 
-# Ruby Env
-export PATH="$HOME/.rbenv/bin:$PATH"
-eval "$(rbenv init -)"
+  # Load bundles from external repos
+  antigen bundle zsh-users/zsh-autosuggestions
+  antigen bundle zsh-users/zsh-completions
+  antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
 
-# Added for Android SDK
-export ANDROID_HOME=$HOME/Library/Android/sdk
-export PATH=$PATH:$ANDROID_HOME/emulator
-export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-export PATH=$PATH:$ANDROID_HOME/platform-tools
+  # NVM bundle
+  export NVM_LAZY_LOAD=true
+  antigen bundle lukechilds/zsh-nvm
+  antigen bundle Sparragus/zsh-auto-nvm-use
+
+  # zsh-users/zsh-syntax-highlighting needs to be last bundle
+  antigen bundle zsh-users/zsh-syntax-highlighting
+
+  antigen apply
+fi
+
+
+# Neovim
+if ! type "nvim" > /dev/null; then
+  echo "Warning: neovim is not installed."
+  echo "Try: brew install nvim"
+else
+  export VISUAL="nvim"
+  export EDITOR="nvim"
+  alias nvimx="${EDITOR} ~/.config/nvim/init.vim"
+fi
+
+# Switch between JDK versions
+# See: https://github.com/AdoptOpenJDK/homebrew-openjdk
+jdk() {
+  version=$1
+  export JAVA_HOME=$(/usr/libexec/java_home -v"$version");
+  java -version
+}
+
+# Android SDK
+ANDROID_HOME=$HOME/Library/Android/sdk
+if [ ! -d "$ANDROID_HOME" ]; then
+    echo "Warning: android SDK not found in path."
+else
+  export PATH=$PATH:$ANDROID_HOME/emulator
+  export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+  export PATH=$PATH:$ANDROID_HOME/platform-tools
+fi
+
+
+# Exa
+if ! type "exa" > /dev/null; then
+  echo "Warning: exa is not installed."
+  echo "Try: brew install exa"
+else
+  alias oldls="ls"
+  alias ls="exa --group-directories-first --icons"
+fi
+
+
+# Starship
+if ! type "starship" > /dev/null; then
+  echo "Warning: starship is not installed."
+  echo "Try: brew install starship"
+else
+  eval "$(starship init zsh)"
+fi
+
+
+# Rbenv
+if ! type "rbenv" > /dev/null; then
+  echo "Warning: rbenv is not installed."
+  echo "Try: brew install rbenv"
+else
+  export PATH="$HOME/.rbenv/bin:$PATH"
+  eval "$(rbenv init -)"
+fi
+
+
+# Pyenv
+if ! command -v pyenv 1>/dev/null 2>&1; then
+  echo "Warning: pyenv is not installed."
+  echo "Try: brew install pyenv"
+else
+  eval "$(pyenv init -)"
+fi
+
+
+# Ranger
+if ! type "ranger" > /dev/null; then
+  echo "Warning: ranger is not installed."
+  echo "Try: brew install ranger"
+fi
+
+
+# Autojump
+if ! type "j" > /dev/null; then
+  echo "Warning: autojump is not installed."
+  echo "Try: brew install autojump"
+fi
