@@ -1,8 +1,8 @@
 # Configuration for Alacritty, the GPU enhanced terminal emulator.
 
 # Setup term for programs to be able to use it
-env:
-  TERM: alacritty
+# env:
+#   TERM: alacritty
 
 scrolling:
   # How many lines of scrollback to keep,

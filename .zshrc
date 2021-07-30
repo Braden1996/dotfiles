@@ -2,11 +2,9 @@
 alias zshx="${EDITOR} ~/.zshrc"
 alias gitx="${EDITOR} ~/.gitconfig"
 
-
-# Add git key
-export GPG_TTY=$(tty)
-eval `ssh-agent -s` > /dev/null
-
+if [ -f ~/.bradenssecrets.sh ]; then
+  source ~/.bradenssecrets.sh
+fi
 
 ANTIGEN_PATH=/opt/homebrew/share/antigen/antigen.zsh
 if [ ! -f "$ANTIGEN_PATH" ]; then
@@ -14,40 +12,41 @@ if [ ! -f "$ANTIGEN_PATH" ]; then
 else
   source $ANTIGEN_PATH
 
-  # Load bundles from the default repo (oh-my-zsh)
-  antigen use oh-my-zsh
-  antigen bundle git
-  antigen bundle heroku
-  antigen bundle pip
-  antigen bundle lein
-  antigen bundle command-not-found
-  antigen bundle autojump
-  antigen bundle brew
-  antigen bundle common-aliases
-  antigen bundle compleat
-  antigen bundle git-extras
-  antigen bundle git-flow
-  antigen bundle npm
-  antigen bundle osx
-  antigen bundle web-search
-  antigen bundle z
+  # # Load bundles from the default repo (oh-my-zsh)
+  # antigen use oh-my-zsh
+  # antigen bundle git
+  # antigen bundle heroku
+  # antigen bundle pip
+  # antigen bundle lein
+  # antigen bundle command-not-found
+  # antigen bundle autojump
+  # antigen bundle brew
+  # antigen bundle common-aliases
+  # antigen bundle compleat
+  # antigen bundle git-extras
+  # antigen bundle git-flow
+  # antigen bundle npm
+  # antigen bundle osx
+  # antigen bundle web-search
+  # antigen bundle z
 
-  # Load bundles from external repos
-  antigen bundle zsh-users/zsh-autosuggestions
-  antigen bundle zsh-users/zsh-completions
-  antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
+  # # Load bundles from external repos
+  # antigen bundle zsh-users/zsh-autosuggestions
+  # antigen bundle zsh-users/zsh-completions
+  # antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
 
-  # NVM bundle
-  export NVM_LAZY_LOAD=true
-  antigen bundle lukechilds/zsh-nvm
-  antigen bundle Sparragus/zsh-auto-nvm-use
+  # # NVM bundle
+  # export NVM_LAZY_LOAD=true
+  # antigen bundle lukechilds/zsh-nvm
+  # antigen bundle Sparragus/zsh-auto-nvm-use
 
-  # zsh-users/zsh-syntax-highlighting needs to be last bundle
-  antigen bundle zsh-users/zsh-syntax-highlighting
+  # # zsh-users/zsh-syntax-highlighting needs to be last bundle
+  # antigen bundle zsh-users/zsh-syntax-highlighting
 
   antigen apply
 fi
 
+mkdir -p ~/.config/zsh/completions
 
 # Neovim
 if ! type "nvim" > /dev/null; then
@@ -97,14 +96,26 @@ else
 fi
 
 
-# Rbenv
-if ! type "rbenv" > /dev/null; then
-  echo "Warning: rbenv is not installed."
-  echo "Try: brew install rbenv"
+# Fnm
+if ! type "fnm" > /dev/null; then
+  echo "Warning: fnm is not installed."
+  echo "Try: brew install fnm"
 else
-  export PATH="$HOME/.rbenv/bin:$PATH"
-  eval "$(rbenv init -)"
+  touch ~/.config/zsh/completions/_fnm
+  fnm completions --shell=zsh > ~/.config/zsh/completions/_fnm
+  eval "$(fnm env)"
 fi
+
+# Rbenv
+# TODO: disabled as rbenv + M1 ARM + pod install doesn't seem to work.
+# https://stackoverflow.com/questions/64901180/running-cocoapods-on-apple-silicon-m1/65334677#65334677
+# if ! type "rbenv" > /dev/null; then
+#   echo "Warning: rbenv is not installed."
+#   echo "Try: brew install rbenv"
+# else
+#   export PATH="$HOME/.rbenv/bin:$PATH"
+#   eval "$(rbenv init -)"
+# fi
 
 
 # Pyenv
@@ -124,7 +135,9 @@ fi
 
 
 # Autojump
-if ! type "j" > /dev/null; then
+if [ ! -f /opt/homebrew/etc/profile.d/autojump.sh ]; then
   echo "Warning: autojump is not installed."
   echo "Try: brew install autojump"
+else
+  . /opt/homebrew/etc/profile.d/autojump.sh
 fi

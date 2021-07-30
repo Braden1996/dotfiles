@@ -24,11 +24,13 @@
   - [Development](#development-)
     - [iOS](#ios-)
     - [Android](#android-)
+- [Shell](#shell-)
 
 ## Introduction 💪
 
-My dotfiles, and go-to applications, for a hasty and more consistent multi-system setup.
+A notepad primarily aimed at reminding myself how to ~cook my porridge~ setup my machine just the way I like it. Aimed for MacOS, but some support for WSL.
 
+Includes favorite applications, dot-files, shell tools etc...
 
 ## Installation 👨🏼‍💻
 
@@ -60,28 +62,12 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
 
 ### Development 🏗
 
+- Font - JetBrains Mono Nerd font: `brew install homebrew/cask-fonts/font-jetbrains-mono-nerd-font`
 - Terminal - Alacritty: `brew install alacritty`
-    1. Install ZSH: `brew install zsh`
-    1. Install tmux (session manager): `brew install tmux`
-    1. Install JetBrains Mono Nerd font: `brew install homebrew/cask-fonts/font-jetbrains-mono-nerd-font`
-    1. Install Starship prompt: `brew install starship`
-    1. Install Antigen ZSH plugin manager: `brew install antigen`
-    1. Install Neovim editor: `brew install neovim`
-    1. Install Exa (better `ls` command): `brew install exa`
-    1. Install Ranger (CLI file-explorer): `brew install ranger`
-    1. Install Autojump (fuzzy `cd` command): `brew install autojump`
-    1. Install Pyenv (manage Python environments): `brew install pyenv`
-    1. Install Rbenv (manage Ruby environments): `brew install rbenv`
-    1. Install nvm (manage Node environments): `brew install nvm`
-        - Install long-term-support version: `nvm install --lts`
-- Git Signing - Krypton: `curl https://krypt.co/kr | sh`
-    1. Doesn't work on latest Macos :(
-    1. Pair `kr` with Krypton mobile device: `kr pair`
-    1. Upload key to GitHub: `kr github`
-- Git Signing - GnuPG2: `brew install gnupg2`
-    1. Does not work on Mac M1: [libgcrypt Mac M1 build fix proposal](https://dev.gnupg.org/D522)
-    1. Tell Git to use GPG2: `git config --global gpg.program gpg2`
-    1. [Follow instructions here](https://docs.github.com/en/github/authenticating-to-github/signing-commits).
+- Terminal - iTerm2: `brew install iterm2`
+  - [Git Clone Dracula theme](https://draculatheme.com/iterm)
+  - Configure font, transparency and blur.
+  - `.config/iterm2/Default.json` can be loaded in.
 - Editor - Visual Studio Code: `brew install visual-studio-code`
     - Settings [synced via GitHub](https://code.visualstudio.com/docs/editor/settings-sync).
 - Mobile Debugger - Flipper: `brew install flipper`
@@ -89,7 +75,10 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
 #### iOS 🍎
 
 1. Install Xcode: [Download from App Store](https://apps.apple.com/gb/app/xcode/id497799835?mt=12)
-1. Install Cocoapods: `sduo gem install cocoapods`
+1. Install Cocoapods: `sudo gem install cocoapods`
+  - For M1 ARM macs:
+    - `sudo arch -x86_64 gem install ffi`
+    - `arch -x86_64 pod install`
 
 #### Android 🤖
 
@@ -105,6 +94,31 @@ My dotfiles, and go-to applications, for a hasty and more consistent multi-syste
         1. `Intel x86 Emulator Accelerator (HAXM installer)`
         1. (`.zshrc` exports `ANDROID_HOME` and amends `PATH`)
 1. Sign soul away: `sdkmanager --licenses`
+
+## Shell 🐚
+
+  - Shell - ZSH: `brew install zsh`
+  - Plugin Manager - Antigen: `brew install antigen`
+    - Currently missing latest M1 build. Track issue [Add macOS ARM builds to CI](https://github.com/alacritty/alacritty/pull/4727)
+  - Prompt Theme - Starship: `brew install starship`
+  - Session Manager - Tmux: `brew install tmux`
+  - Editor - Neovim: `brew install neovim`
+      - Install [vim-plug for Neovim](https://github.com/junegunn/vim-plug#unix-linux):
+        ```
+          sh -c 'curl -fLo "${XDG_DATA_HOME:-$HOME/.local/share}"/nvim/site/autoload/plug.vim --create-dirs \
+                https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim'
+        ```
+  - List Command - EXA: `brew install exa`
+  - File Explorer - Ranger: `brew install ranger`
+  - Fuzzy CD - Autojump: `brew install autojump`
+  - Python Environments - Pyenv: `brew install pyenv`
+  - Ruby Environments - Rbenv: `brew install pyenv`
+  - Node Environments - FNM: `brew install fnm`
+    - Install node version: `fnm install 16.6.0`
+  - Node Package Manager - Yarn: `brew install yarn`
+    - Install node version: `fnm install 16.6.0`
+  - GitHub SSH key:
+    - See [Generating a new SSH key and adding it to the ssh-agent](https://docs.github.com/en/github/authenticating-to-github/connecting-to-github-with-ssh)
 
 <br />
 
