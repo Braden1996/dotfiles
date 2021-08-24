@@ -12,36 +12,31 @@ if [ ! -f "$ANTIGEN_PATH" ]; then
 else
   source $ANTIGEN_PATH
 
-  # # Load bundles from the default repo (oh-my-zsh)
-  # antigen use oh-my-zsh
-  # antigen bundle git
-  # antigen bundle heroku
-  # antigen bundle pip
-  # antigen bundle lein
-  # antigen bundle command-not-found
-  # antigen bundle autojump
-  # antigen bundle brew
-  # antigen bundle common-aliases
-  # antigen bundle compleat
-  # antigen bundle git-extras
-  # antigen bundle git-flow
-  # antigen bundle npm
-  # antigen bundle osx
-  # antigen bundle web-search
-  # antigen bundle z
+  # Load bundles from the default repo (oh-my-zsh)
+  antigen use oh-my-zsh
+  antigen bundle git
+  antigen bundle heroku
+  antigen bundle pip
+  antigen bundle lein
+  antigen bundle command-not-found
+  antigen bundle autojump
+  antigen bundle brew
+  antigen bundle common-aliases
+  antigen bundle compleat
+  antigen bundle git-extras
+  antigen bundle git-flow
+  antigen bundle npm
+  antigen bundle osx
+  antigen bundle web-search
+  antigen bundle z
 
-  # # Load bundles from external repos
-  # antigen bundle zsh-users/zsh-autosuggestions
-  # antigen bundle zsh-users/zsh-completions
-  # antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
+  # Load bundles from external repos
+  antigen bundle zsh-users/zsh-autosuggestions
+  antigen bundle zsh-users/zsh-completions
+  antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
 
-  # # NVM bundle
-  # export NVM_LAZY_LOAD=true
-  # antigen bundle lukechilds/zsh-nvm
-  # antigen bundle Sparragus/zsh-auto-nvm-use
-
-  # # zsh-users/zsh-syntax-highlighting needs to be last bundle
-  # antigen bundle zsh-users/zsh-syntax-highlighting
+  # zsh-users/zsh-syntax-highlighting needs to be last bundle
+  antigen bundle zsh-users/zsh-syntax-highlighting
 
   antigen apply
 fi

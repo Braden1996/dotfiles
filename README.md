@@ -102,6 +102,8 @@ Includes favorite applications, dot-files, shell tools etc...
     - Currently missing latest M1 build. Track issue [Add macOS ARM builds to CI](https://github.com/alacritty/alacritty/pull/4727)
   - Prompt Theme - Starship: `brew install starship`
   - Session Manager - Tmux: `brew install tmux`
+    - Plugin Manager - TPM: `git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm`
+      - Fire install command: https://github.com/tmux-plugins/tpm#installing-plugins
   - Editor - Neovim: `brew install neovim`
       - Install [vim-plug for Neovim](https://github.com/junegunn/vim-plug#unix-linux):
         ```
