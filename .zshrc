@@ -1,3 +1,8 @@
+
+#### FIG ENV VARIABLES ####
+# Please make sure this block is at the start of this file.
+[ -s ~/.fig/shell/pre.sh ] && source ~/.fig/shell/pre.sh
+#### END FIG ENV VARIABLES ####
 # Handy aliases to edit common files
 alias zshx="${EDITOR} ~/.zshrc"
 alias gitx="${EDITOR} ~/.gitconfig"
@@ -136,3 +141,10 @@ if [ ! -f /opt/homebrew/etc/profile.d/autojump.sh ]; then
 else
   . /opt/homebrew/etc/profile.d/autojump.sh
 fi
+
+set -o emacs
+
+#### FIG ENV VARIABLES ####
+# Please make sure this block is at the end of this file.
+[ -s ~/.fig/fig.sh ] && source ~/.fig/fig.sh
+#### END FIG ENV VARIABLES ####

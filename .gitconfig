@@ -13,9 +13,9 @@
 	default = current
 [commit]
 	# TODO: wait for libgcrypt Mac M1 build fix proposal
-	gpgSign = false
+	gpgsign = true
 [gpg]
-	program = gpg2
+	program = /usr/local/bin/gpg
 [tag]
 	forceSignAnnotated = true
 [pull]
@@ -23,3 +23,17 @@
 
 [url "git@github.com:"]
 	insteadOf = https://github.com/
+[diff]
+	tool = Kaleidoscope
+[difftool "Kaleidoscope"]
+	cmd = ksdiff --partial-changeset --relative-path \"$MERGED\" -- \"$LOCAL\" \"$REMOTE\"
+[difftool]
+	prompt = false
+[merge]
+	tool = Kaleidoscope
+[mergetool "Kaleidoscope"]
+	cmd = ksdiff --merge --output \"$MERGED\" --base \"$BASE\" -- \"$LOCAL\" --snapshot \"$REMOTE\" --snapshot
+	trustExitCode = true
+[mergetool]
+	prompt = false
+	keepBackup = true
