@@ -1,150 +1,142 @@
+# Fig pre block. Keep at the top of this file.
+[[ -f "$HOME/.fig/shell/zshrc.pre.zsh" ]] && . "$HOME/.fig/shell/zshrc.pre.zsh"
 
-#### FIG ENV VARIABLES ####
-# Please make sure this block is at the start of this file.
-[ -s ~/.fig/shell/pre.sh ] && source ~/.fig/shell/pre.sh
-#### END FIG ENV VARIABLES ####
-# Handy aliases to edit common files
-alias zshx="${EDITOR} ~/.zshrc"
-alias gitx="${EDITOR} ~/.gitconfig"
-
-if [ -f ~/.bradenssecrets.sh ]; then
-  source ~/.bradenssecrets.sh
+### Added by Zinit's installer
+if [[ ! -f $HOME/.local/share/zinit/zinit.git/zinit.zsh ]]; then
+  print -P "%F{33} %F{220}Installing %F{33}ZDHARMA-CONTINUUM%F{220} Initiative Plugin Manager (%F{33}zdharma-continuum/zinit%F{220})…%f"
+  command mkdir -p "$HOME/.local/share/zinit" && command chmod g-rwX "$HOME/.local/share/zinit"
+  command git clone https://github.com/zdharma-continuum/zinit "$HOME/.local/share/zinit/zinit.git" && \
+    print -P "%F{33} %F{34}Installation successful.%f%b" || \
+    print -P "%F{160} The clone has failed.%f%b"
 fi
 
-ANTIGEN_PATH=/opt/homebrew/share/antigen/antigen.zsh
-if [ ! -f "$ANTIGEN_PATH" ]; then
-    echo "Warning: antigen not found in path."
-else
-  source $ANTIGEN_PATH
+source "$HOME/.local/share/zinit/zinit.git/zinit.zsh"
+autoload -Uz _zinit
+(( ${+_comps} )) && _comps[zinit]=_zinit
 
-  # Load bundles from the default repo (oh-my-zsh)
-  antigen use oh-my-zsh
-  antigen bundle git
-  antigen bundle heroku
-  antigen bundle pip
-  antigen bundle lein
-  antigen bundle command-not-found
-  antigen bundle autojump
-  antigen bundle brew
-  antigen bundle common-aliases
-  antigen bundle compleat
-  antigen bundle git-extras
-  antigen bundle git-flow
-  antigen bundle npm
-  antigen bundle osx
-  antigen bundle web-search
-  antigen bundle z
+# Load a few important annexes, without Turbo
+# (this is currently required for annexes)
+zinit light-mode for \
+  zdharma-continuum/zinit-annex-as-monitor \
+  zdharma-continuum/zinit-annex-bin-gem-node \
+  zdharma-continuum/zinit-annex-patch-dl \
+  zdharma-continuum/zinit-annex-rust
 
-  # Load bundles from external repos
-  antigen bundle zsh-users/zsh-autosuggestions
-  antigen bundle zsh-users/zsh-completions
-  antigen bundle zsh-users/zsh-history-substring-search ./zsh-history-substring-search.zsh
+### End of Zinit's installer chunk
 
-  # zsh-users/zsh-syntax-highlighting needs to be last bundle
-  antigen bundle zsh-users/zsh-syntax-highlighting
+# Should Starship add a new line before the prompt?
+STARSHIP_PROMPT_NEED_NEWLINE=false
 
-  antigen apply
-fi
+# START - https://github.com/zdharma-continuum/zinit
+zinit ice as"command" from"gh-r" \
+  atclone"./starship init zsh > init.zsh; ./starship completions zsh > _starship" \
+  atpull"%atclone" src"init.zsh"
+zinit light starship/starship
+# END - https://github.com/zdharma-continuum/zinit
 
-mkdir -p ~/.config/zsh/completions
+# Loading tmux first, to prevent jumps when tmux is loaded after .zshrc
+# It will only be loaded on first start
+zinit lucid for OMZP::tmux
 
-# Neovim
-if ! type "nvim" > /dev/null; then
-  echo "Warning: neovim is not installed."
-  echo "Try: brew install nvim"
-else
-  export VISUAL="nvim"
-  export EDITOR="nvim"
-  alias nvimx="${EDITOR} ~/.config/nvim/init.vim"
-fi
-
-# Switch between JDK versions
-# See: https://github.com/AdoptOpenJDK/homebrew-openjdk
-jdk() {
-  version=$1
-  export JAVA_HOME=$(/usr/libexec/java_home -v"$version");
-  java -version
-}
-
-# Android SDK
-ANDROID_HOME=$HOME/Library/Android/sdk
-if [ ! -d "$ANDROID_HOME" ]; then
-    echo "Warning: android SDK not found in path."
-else
-  export PATH=$PATH:$ANDROID_HOME/emulator
-  export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-  export PATH=$PATH:$ANDROID_HOME/platform-tools
-fi
+# START - https://zdharma-continuum.github.io/zinit/wiki/Example-Minimal-Setup/
+zinit wait lucid light-mode for \
+  atinit"zicompinit; zicdreplay" \
+    zdharma-continuum/fast-syntax-highlighting \
+  atload"_zsh_autosuggest_start; ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE=\"fg=10\"" \
+    zsh-users/zsh-autosuggestions \
+  blockf atpull'zinit creinstall -q .' \
+    zsh-users/zsh-completions
+# END - https://zdharma-continuum.github.io/zinit/wiki/Example-Minimal-Setup/
 
 
-# Exa
-if ! type "exa" > /dev/null; then
-  echo "Warning: exa is not installed."
-  echo "Try: brew install exa"
-else
-  alias oldls="ls"
-  alias ls="exa --group-directories-first --icons"
-fi
+# START - https://github.com/zdharma-continuum/history-search-multi-word
+zinit wait="1" lucid light-mode for \
+  zdharma-continuum/history-search-multi-word
+# END - https://github.com/zdharma-continuum/history-search-multi-word
 
+# #=== OH-MY-ZSH & PREZTO PLUGINS =======================
+# https://github.com/ohmyzsh/ohmyzsh/tree/master/lib
+zi snippet OMZL::clipboard.zsh
+zi snippet OMZL::compfix.zsh
+zi snippet OMZL::completion.zsh
+zi snippet OMZL::git.zsh
+zi snippet OMZL::key-bindings.zsh
 
-# Starship
-if ! type "starship" > /dev/null; then
-  echo "Warning: starship is not installed."
-  echo "Try: brew install starship"
-else
-  eval "$(starship init zsh)"
-fi
+# Azure requires register-python-argcomplete
+PATH=$PATH:/Users/braden/Library/Python/3.8/bin
+[[ -f "/Users/braden/Library/Python/3.8/bin/register-python-argcomplete" ]] && zi snippet https://github.com/ohmyzsh/ohmyzsh/blob/64debaf004b5ec80d9fc849175d3efa7168def44/plugins/azure/azure.plugin.zsh
 
+# https://github.com/ohmyzsh/ohmyzsh/tree/master/plugins
+zi snippet OMZP::brew
+zi snippet OMZP::colored-man-pages
+zi snippet OMZP::git
+zi snippet OMZP::golang
+zi snippet OMZP::npm
+zi snippet OMZP::nvm
+zi snippet OMZP::pip
+zi snippet OMZP::react-native
+zi snippet OMZP::terraform
+zi snippet OMZP::yarn
 
-# Fnm
-if ! type "fnm" > /dev/null; then
-  echo "Warning: fnm is not installed."
-  echo "Try: brew install fnm"
-else
-  touch ~/.config/zsh/completions/_fnm
-  fnm completions --shell=zsh > ~/.config/zsh/completions/_fnm
-  eval "$(fnm env)"
-fi
+# https://github.com/sorin-ionescu/prezto/tree/master/modules
+zi snippet PZT::modules/environment
+zi snippet PZT::modules/history
+zi snippet PZT::modules/rsync
 
-# Rbenv
-# TODO: disabled as rbenv + M1 ARM + pod install doesn't seem to work.
-# https://stackoverflow.com/questions/64901180/running-cocoapods-on-apple-silicon-m1/65334677#65334677
-# if ! type "rbenv" > /dev/null; then
-#   echo "Warning: rbenv is not installed."
-#   echo "Try: brew install rbenv"
-# else
-#   export PATH="$HOME/.rbenv/bin:$PATH"
-#   eval "$(rbenv init -)"
-# fi
+zinit light "MichaelAquilina/zsh-you-should-use"
 
+#=== GITHUB BINARIES ==================================
+# diff-s-fancy
+zinit ice \
+  depth=1 \
+  lucid \
+  wait'0c' \
+  as'program' \
+  pick'bin/git-dsf'
+zinit light zdharma-continuum/zsh-diff-so-fancy
 
-# Pyenv
-if ! command -v pyenv 1>/dev/null 2>&1; then
-  echo "Warning: pyenv is not installed."
-  echo "Try: brew install pyenv"
-else
-  eval "$(pyenv init -)"
-fi
+# fzf: binary
+zinit ice \
+  lucid \
+  wait'0b' \
+  from"gh-r" \
+  as"program" \
+  atload"source ~/.fzf.settings"
+zinit light junegunn/fzf
 
+zinit light lukechilds/zsh-nvm
 
-# Ranger
-if ! type "ranger" > /dev/null; then
-  echo "Warning: ranger is not installed."
-  echo "Try: brew install ranger"
-fi
+# fzf: completions and key bindings
+zinit ice \
+  lucid \
+  wait'0c' \
+  multisrc"shell/{completion,key-bindings}.zsh" \
+  id-as"junegunn/fzf_completions" \
+  pick"/dev/null"
+zinit light junegunn/fzf
 
+# Better tab complete
+zinit ice \
+  wait'2' \
+  lucid \
+  atload"
+zstyle ':completion:*:*:aws' fzf-search-display true
+zstyle ':completion:*:descriptions' format '[%d]'
+zstyle ':completion:*:git-checkout:*' sort false
+zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+zstyle ':fzf-tab:*' switch-group ',' '.'
+zstyle ':fzf-tab:*' switch-group ',' '.'
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'exa -1 --icons --color=always $realpath'
+  "
+zinit light Aloxaf/fzf-tab
 
-# Autojump
-if [ ! -f /opt/homebrew/etc/profile.d/autojump.sh ]; then
-  echo "Warning: autojump is not installed."
-  echo "Try: brew install autojump"
-else
-  . /opt/homebrew/etc/profile.d/autojump.sh
-fi
+### Zoxide "z" jump
+zinit ice wait"1" as"command" from"gh-r" lucid \
+  mv"zoxide*/zoxide -> zoxide" \
+  atclone"./zoxide init zsh --cmd j > init.zsh" \
+  atpull"%atclone" src"init.zsh" nocompile'!'
 
-set -o emacs
+zinit light ajeetdsouza/zoxide
 
-#### FIG ENV VARIABLES ####
-# Please make sure this block is at the end of this file.
-[ -s ~/.fig/fig.sh ] && source ~/.fig/fig.sh
-#### END FIG ENV VARIABLES ####
+# Fig post block. Keep at the bottom of this file.
+[[ -f "$HOME/.fig/shell/zshrc.post.zsh" ]] && . "$HOME/.fig/shell/zshrc.post.zsh"
