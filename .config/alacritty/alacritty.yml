@@ -10,18 +10,18 @@ scrolling:
 
 font:
   normal:
-    family: "MonoLisa Nerd Font"
+    family: "MonoLisa Nerd Font Mono"
 
   bold:
-    family: "MonoLisa Nerd Font"
+    family: "MonoLisa Nerd Font Mono"
     style: Bold
 
   italic:
-    family: "MonoLisa Nerd Font"
+    family: "MonoLisa Nerd Font Mono"
     style: Italic
 
   bold_italic:
-    family: "MonoLisa Nerd Font"
+    family: "MonoLisa Nerd Font Mono"
     style: Italic
 
   # Font size
@@ -43,9 +43,6 @@ font:
    x: 0
    # Keeping this as half of offset to vertically align the text in cursor
    y: 7
-
-  # Better font rendering for mac
-  use_thin_strokes: true
 
 selection:
   semantic_escape_chars: ",│`|:\"' ()[]{}<>\t"
