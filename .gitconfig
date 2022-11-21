@@ -9,6 +9,8 @@
 [user]
 	name = Braden Marshall
 	email = braden1996@hotmail.co.uk
+[includeIf "gitdir:~/Development/Phoenix/"]
+    path = ~/.attio.gitconfig
 [push]
 	default = current
 [commit]
