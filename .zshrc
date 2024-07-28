@@ -1,3 +1,6 @@
+# Probably:
+# brew install fzf starship rbenv pyenv eza antidote
+
 # Setup Starship prompt
 STARSHIP_PROMPT_NEED_NEWLINE=false
 zstyle ':zephyr:plugin:prompt' theme 'starship'
