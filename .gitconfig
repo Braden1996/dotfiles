@@ -6,6 +6,7 @@
     ll = ls --numstat
     last = --no-pager log -1 --oneline --color
     nuke = "!f(){ git reset --hard && git clean -fd; };f"
+    stash-unstaged = stash --keep-index -u
 [user]
 	name = Braden Marshall
 	email = braden1996@hotmail.co.uk
