@@ -1,0 +1,9 @@
+mattmc3/zephyr path:plugins/prompt
+zimfw/fzf
+ajeetdsouza/zoxide
+zdharma-continuum/fast-syntax-highlighting
+getantidote/use-omz
+ohmyzsh/ohmyzsh path:plugins/git
+ohmyzsh/ohmyzsh path:plugins/yarn
+ohmyzsh/ohmyzsh path:plugins/nvm
+ohmyzsh/ohmyzsh path:plugins/magic-enter
