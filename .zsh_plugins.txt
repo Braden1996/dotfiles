@@ -1,9 +1,17 @@
 mattmc3/zephyr path:plugins/prompt
-zimfw/fzf
-ajeetdsouza/zoxide
-zdharma-continuum/fast-syntax-highlighting
+mattmc3/zephyr path:plugins/history
+mattmc3/zephyr path:plugins/completion
+mattmc3/zephyr path:plugins/compstyle
 getantidote/use-omz
 ohmyzsh/ohmyzsh path:plugins/git
 ohmyzsh/ohmyzsh path:plugins/yarn
 ohmyzsh/ohmyzsh path:plugins/nvm
 ohmyzsh/ohmyzsh path:plugins/magic-enter
+jscutlery/nx-completion
+ajeetdsouza/zoxide
+zimfw/fzf
+Aloxaf/fzf-tab
+atuinsh/atuin
+zsh-users/zsh-autosuggestions
+zdharma-continuum/fast-syntax-highlighting
+jirutka/zsh-shift-select
