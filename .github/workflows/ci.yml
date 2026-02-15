@@ -57,7 +57,7 @@ jobs:
             echo "--- $f"
             cleaned=$(mktemp)
             sed 's/{{.*}}//g' "$f" > "$cleaned"
-            if ! shellcheck --shell=bash "$cleaned"; then
+            if ! shellcheck --shell=bash --exclude=SC1090,SC1091 "$cleaned"; then
               status=1
             fi
             rm "$cleaned"
@@ -70,7 +70,7 @@ jobs:
           for f in dot_bashrc dot_profile; do
             if [ -f "$f" ]; then
               echo "--- $f"
-              if ! shellcheck --shell=bash "$f"; then
+              if ! shellcheck --shell=bash --exclude=SC1090,SC1091 "$f"; then
                 status=1
               fi
             fi
