@@ -1,0 +1,149 @@
+{
+  "git": {
+    "inline_blame": {
+      "show_commit_summary": true
+    }
+  },
+  "terminal": {
+    "toolbar": {
+      "breadcrumbs": false
+    }
+  },
+  "code_actions_on_format": {
+    "source.fixAll.biome": true,
+    "source.organizeImports.biome": true
+  },
+  "format_on_save": "on",
+  "formatter": {
+    "language_server": {
+      "name": "biome"
+    }
+  },
+  "lsp": {
+    "biome": {
+      "binary": {
+        "path": "{{ .chezmoi.homeDir }}/.bun/bin/biome",
+        "arguments": [
+          "lsp-proxy"
+        ]
+      }
+    }
+  },
+  "languages": {
+    "JavaScript": {
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      },
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "TypeScript": {
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      },
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "TSX": {
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      },
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "JSON": {
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "JSONC": {
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "CSS": {
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    }
+  },
+  "project_panel": {
+    "dock": "right",
+    "hide_root": true
+  },
+  "bottom_dock_layout": "contained",
+  "tabs": {
+    "show_close_button": "hover",
+    "file_icons": true,
+    "git_status": true
+  },
+  "title_bar": {
+    "show_menus": true,
+    "show_branch_icon": true
+  },
+  "inlay_hints": {
+    "show_background": false,
+    "enabled": false
+  },
+  "completion_menu_scrollbar": "system",
+  "show_whitespaces": "selection",
+  "indent_guides": {
+    "background_coloring": "disabled",
+    "coloring": "indent_aware",
+    "enabled": true
+  },
+  "preferred_line_length": 120,
+  "soft_wrap": "preferred_line_length",
+  "toolbar": {
+    "code_actions": false
+  },
+  "minimap": {
+    "show": "always"
+  },
+  "sticky_scroll": {
+    "enabled": true
+  },
+  "ui_font_family": "Atkinson Hyperlegible",
+  "buffer_line_height": "comfortable",
+  "buffer_font_family": "FiraCode Nerd Font Mono",
+  "git_panel": {
+    "sort_by_path": false,
+    "dock": "left"
+  },
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false
+  },
+  "icon_theme": {
+    "mode": "system",
+    "light": "Zed (Default)",
+    "dark": "Material Icon Theme"
+  },
+  "colorize_brackets": true,
+  "base_keymap": "Cursor",
+  "ui_font_size": 16.25,
+  "buffer_font_size": 13.25,
+  "theme": {
+    "mode": "dark",
+    "light": "One Light",
+    "dark": "Catppuccin Macchiato (Blur) [Heavy]"
+  }
+}

@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint-templates:
+    name: Lint templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install chezmoi
+        run: sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"
+
+      - name: Create test config
+        run: |
+          mkdir -p "$HOME/.config/chezmoi"
+          cat > "$HOME/.config/chezmoi/chezmoi.toml" <<'EOF'
+          [data]
+            machineType = "personal"
+            gitName = "Test"
+            personalEmail = "test@example.com"
+            workEmail = ""
+            onePasswordAccount = "test.1password.com"
+          EOF
+
+      - name: Validate templates
+        run: |
+          status=0
+          for f in $(find . -name '*.tmpl' -not -path './.git/*'); do
+            echo "--- $f"
+            if ! "$HOME/bin/chezmoi" execute-template < "$f" > /dev/null 2>&1; then
+              echo "FAIL: $f"
+              "$HOME/bin/chezmoi" execute-template < "$f" || true
+              status=1
+            fi
+          done
+          exit $status
+
+  lint-shell:
+    name: Lint shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Shellcheck .sh.tmpl files
+        run: |
+          status=0
+          for f in $(find . -name '*.sh.tmpl' -not -path './.git/*'); do
+            echo "--- $f"
+            cleaned=$(mktemp)
+            sed 's/{{.*}}//g' "$f" > "$cleaned"
+            if ! shellcheck --shell=bash "$cleaned"; then
+              status=1
+            fi
+            rm "$cleaned"
+          done
+          exit $status
+
+      - name: Shellcheck static shell files
+        run: |
+          status=0
+          for f in dot_bashrc dot_profile; do
+            if [ -f "$f" ]; then
+              echo "--- $f"
+              if ! shellcheck --shell=bash "$f"; then
+                status=1
+              fi
+            fi
+          done
+          exit $status
+
+  validate-json:
+    name: Validate JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install chezmoi
+        run: sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"
+
+      - name: Create test config
+        run: |
+          mkdir -p "$HOME/.config/chezmoi"
+          cat > "$HOME/.config/chezmoi/chezmoi.toml" <<'EOF'
+          [data]
+            machineType = "personal"
+            gitName = "Test"
+            personalEmail = "test@example.com"
+            workEmail = ""
+            onePasswordAccount = "test.1password.com"
+          EOF
+
+      - name: Validate settings.json.tmpl
+        run: |
+          "$HOME/bin/chezmoi" execute-template < dot_config/zed/settings.json.tmpl | jq . > /dev/null

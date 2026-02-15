@@ -1,0 +1,18 @@
+{{- $machineType := promptChoiceOnce . "machineType" "Machine type (personal/work)" (list "personal" "work") -}}
+{{- $gitName := promptStringOnce . "gitName" "Git author name" -}}
+{{- $personalEmail := promptStringOnce . "personalEmail" "Personal email address" -}}
+{{- $workEmail := "" -}}
+{{- if eq $machineType "work" -}}
+{{-   $workEmail = promptStringOnce . "workEmail" "Work email address" -}}
+{{- end -}}
+{{- $onePasswordAccount := promptStringOnce . "onePasswordAccount" "1Password account (e.g. my.1password.com)" -}}
+
+[data]
+  machineType = {{ $machineType | quote }}
+  gitName = {{ $gitName | quote }}
+  personalEmail = {{ $personalEmail | quote }}
+  workEmail = {{ $workEmail | quote }}
+  onePasswordAccount = {{ $onePasswordAccount | quote }}
+
+[onepassword]
+  command = "op"

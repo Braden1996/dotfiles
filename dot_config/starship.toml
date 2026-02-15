@@ -1,0 +1,352 @@
+# =============================================================================
+# Starship Prompt Configuration
+# Theme: Catppuccin Macchiato with soft powerline separators
+# =============================================================================
+
+# Catppuccin Macchiato Color Palette
+palette = "catppuccin_macchiato"
+
+# =============================================================================
+# Format Configuration
+# =============================================================================
+add_newline = true
+continuation_prompt = "[▸▹ ](overlay1)"
+
+# Left side: context + character (where you type)
+# Dimmed diamond separator between directory and git
+format = """$username$hostname$container$directory$git_branch$git_status$git_state $character"""
+
+# Right side: metadata only (time/duration)
+right_format = """$cmd_duration$time"""
+
+# =============================================================================
+# Character Module (Runes!)
+# =============================================================================
+[character]
+success_symbol = "[ᛃ](bold lavender)"
+error_symbol = "[ᛃ](bold red)"
+vimcmd_symbol = "[ᛃ](bold mauve)"
+
+# =============================================================================
+# Directory Module
+# =============================================================================
+[directory]
+format = "[$read_only]($read_only_style)[$path]($style)"
+style = "bold sapphire"
+read_only = "󰌾 "
+read_only_style = "red"
+truncation_length = 3
+truncation_symbol = "…/"
+truncate_to_repo = true
+home_symbol = "~"
+repo_root_format = "[$before_root_path]($before_repo_root_style)[$repo_root]($repo_root_style)[$path]($style)[$read_only]($read_only_style)"
+repo_root_style = "bold sapphire"
+before_repo_root_style = "dimmed sapphire"
+
+[directory.substitutions]
+"Documents" = "󰈙 "
+"Downloads" = " "
+"Music" = "󰝚 "
+"Pictures" = " "
+"Developer" = " "
+"Projects" = " "
+".config" = " "
+
+# =============================================================================
+# Git Modules
+# =============================================================================
+[git_branch]
+format = "[⋄](overlay0)[$symbol$branch]($style)"
+symbol = "󰘬"
+style = "mauve"
+
+[git_status]
+disabled = false
+format = '([$all_status$ahead_behind]($style))'
+style = "flamingo"
+conflicted = "󰞇 "
+ahead = "󰜷${count}"
+behind = "󰜮${count}"
+diverged = "󰹺 󰜷${ahead_count}󰜮${behind_count}"
+up_to_date = ""
+untracked = "󰜄 "
+stashed = ""
+modified = "󰏫 "
+staged = "󰐗 "
+renamed = "󰑕 "
+deleted = "󰍶 "
+
+[git_commit]
+format = "[ $hash$tag]($style) "
+tag_symbol = " 󰓹 "
+style = "mauve"
+
+[git_state]
+format = '[\($state( $progress_current of $progress_total)\)]($style) '
+cherry_pick = "[󰇚 PICKING](bold red)"
+rebase = "[󰳖 REBASING](bold mauve)"
+merge = "[󰘭 MERGING](bold blue)"
+revert = "[󰕍 REVERTING](bold yellow)"
+bisect = "[󰃻 BISECTING](bold peach)"
+
+# =============================================================================
+# Time & Duration
+# =============================================================================
+[cmd_duration]
+format = "[󱎫 $duration]($style) "
+style = "peach"
+min_time = 2000
+
+[time]
+disabled = false
+format = "$time"
+time_format = "%R"
+utc_time_offset = "local"
+style = "subtext1"
+
+# =============================================================================
+# SSH & Container Indicators
+# =============================================================================
+[hostname]
+ssh_only = true
+ssh_symbol = "󰣀 "
+format = "[$ssh_symbol$hostname]($style) "
+style = "bold flamingo"
+
+[container]
+format = "[$symbol $name]($style) "
+symbol = "󰡨"
+style = "bold mauve"
+
+[username]
+show_always = false
+format = "[$user]($style)@"
+style_user = "flamingo"
+style_root = "bold red"
+
+# =============================================================================
+# Language Modules with Catppuccin Colors
+# =============================================================================
+[nodejs]
+disabled = true
+
+[python]
+disabled = true
+
+[rust]
+disabled = true
+
+[golang]
+disabled = true
+
+[java]
+disabled = true
+
+[ruby]
+disabled = true
+
+[lua]
+disabled = true
+
+# =============================================================================
+# Other Language Modules (keep icons, apply palette)
+# =============================================================================
+[aws]
+symbol = "  "
+style = "peach"
+
+[buf]
+symbol = " "
+
+[c]
+symbol = " "
+style = "blue"
+
+[cmake]
+symbol = " "
+
+[conda]
+symbol = " "
+style = "green"
+
+[crystal]
+symbol = " "
+
+[dart]
+symbol = " "
+style = "sky"
+
+[docker_context]
+symbol = " "
+style = "blue"
+
+[elixir]
+symbol = " "
+style = "mauve"
+
+[elm]
+symbol = " "
+
+[fennel]
+symbol = " "
+
+[fossil_branch]
+symbol = " "
+
+[guix_shell]
+symbol = " "
+
+[haskell]
+symbol = " "
+style = "mauve"
+
+[haxe]
+symbol = " "
+
+[hg_branch]
+symbol = " "
+
+[julia]
+symbol = " "
+style = "mauve"
+
+[kotlin]
+symbol = " "
+style = "mauve"
+
+[memory_usage]
+symbol = "󰍛 "
+
+[meson]
+symbol = "󰔷 "
+
+[nim]
+symbol = "󰆥 "
+style = "yellow"
+
+[nix_shell]
+symbol = " "
+style = "blue"
+
+[ocaml]
+symbol = " "
+style = "peach"
+
+[package]
+symbol = "󰏗 "
+
+[perl]
+symbol = " "
+
+[php]
+symbol = " "
+style = "mauve"
+
+[pijul_channel]
+symbol = " "
+
+[rlang]
+symbol = "󰟔 "
+style = "blue"
+
+[scala]
+symbol = " "
+style = "red"
+
+[swift]
+symbol = " "
+style = "peach"
+
+[zig]
+symbol = " "
+style = "peach"
+
+[gradle]
+symbol = " "
+
+[gcloud]
+disabled = true
+
+[dotnet]
+disabled = true
+
+# =============================================================================
+# OS Symbols
+# =============================================================================
+[os.symbols]
+Alpaquita = " "
+Alpine = " "
+AlmaLinux = " "
+Amazon = " "
+Android = " "
+Arch = " "
+Artix = " "
+CachyOS = " "
+CentOS = " "
+Debian = " "
+DragonFly = " "
+Emscripten = " "
+EndeavourOS = " "
+Fedora = " "
+FreeBSD = " "
+Garuda = "󰛓 "
+Gentoo = " "
+HardenedBSD = "󰞌 "
+Illumos = "󰈸 "
+Kali = " "
+Linux = " "
+Mabox = " "
+Macos = " "
+Manjaro = " "
+Mariner = " "
+MidnightBSD = " "
+Mint = " "
+NetBSD = " "
+NixOS = " "
+Nobara = " "
+OpenBSD = "󰈺 "
+openSUSE = " "
+OracleLinux = "󰌷 "
+Pop = " "
+Raspbian = " "
+Redhat = " "
+RedHatEnterprise = " "
+RockyLinux = " "
+Redox = "󰀘 "
+Solus = "󰠳 "
+SUSE = " "
+Ubuntu = " "
+Unknown = " "
+Void = " "
+Windows = "󰍲 "
+
+# =============================================================================
+# Color Palette (must be at the end of the file)
+# =============================================================================
+[palettes.catppuccin_macchiato]
+rosewater = "#f4dbd6"
+flamingo = "#f0c6c6"
+pink = "#f5bde6"
+mauve = "#c6a0f6"
+red = "#ed8796"
+maroon = "#ee99a0"
+peach = "#f5a97f"
+yellow = "#eed49f"
+green = "#a6da95"
+teal = "#8bd5ca"
+sky = "#91d7e3"
+sapphire = "#7dc4e4"
+blue = "#8aadf4"
+lavender = "#b7bdf8"
+text = "#cad3f5"
+subtext1 = "#b8c0e0"
+subtext0 = "#a5adcb"
+overlay2 = "#939ab7"
+overlay1 = "#8087a2"
+overlay0 = "#6e738d"
+surface2 = "#5b6078"
+surface1 = "#494d64"
+surface0 = "#363a4f"
+base = "#24273a"
+mantle = "#1e2030"
+crust = "#181926"

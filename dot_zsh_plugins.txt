@@ -1,0 +1,31 @@
+# Core framework (must load first)
+mattmc3/zephyr path:plugins/prompt
+mattmc3/zephyr path:plugins/completion
+mattmc3/zephyr path:plugins/compstyle
+
+# Oh-My-Zsh plugins (selective)
+getantidote/use-omz
+ohmyzsh/ohmyzsh path:plugins/git
+ohmyzsh/ohmyzsh path:plugins/magic-enter
+ohmyzsh/ohmyzsh path:plugins/extract
+ohmyzsh/ohmyzsh path:plugins/sudo
+
+# Completions
+zsh-users/zsh-completions
+
+# Navigation & Search (core functionality)
+ajeetdsouza/zoxide
+zimfw/fzf
+Aloxaf/fzf-tab
+atuinsh/atuin
+jirutka/zsh-shift-select
+
+# Deferred plugins (loaded after prompt appears)
+zsh-users/zsh-autosuggestions kind:defer
+hlissner/zsh-autopair kind:defer
+MichaelAquilina/zsh-you-should-use kind:defer
+wfxr/forgit kind:defer
+
+# Syntax highlighting - skip if using Warp (has built-in highlighting)
+# To disable: comment out the line below and regenerate plugins
+zdharma-continuum/fast-syntax-highlighting kind:defer

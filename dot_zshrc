@@ -1,0 +1,11 @@
+# =============================================================================
+# ZSH Configuration
+# =============================================================================
+# Modular config loaded from ~/.config/zsh/
+# To check dependencies: zsh-check-deps
+
+# Source all config files in order
+for config in ~/.config/zsh/[0-9]*.zsh(N); do
+  source "$config"
+done
+unset config

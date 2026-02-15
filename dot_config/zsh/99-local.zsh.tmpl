@@ -1,0 +1,23 @@
+# =============================================================================
+# Local Overrides & External Tools
+# =============================================================================
+# Machine-specific configuration that shouldn't be committed
+
+# Nx completion
+[ -s "$HOME/.nx-completion/nx-completion.plugin.zsh" ] && source "$HOME/.nx-completion/nx-completion.plugin.zsh"
+
+# Bun completions
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
+
+# 1Password-backed secrets
+# To enable 1Password integration, uncomment and adjust the op:// URIs below.
+# Requires `op` CLI to be installed and configured.
+# export NGROK_AUTHTOKEN="$(op read 'op://Private/ngrok/credential' --account {{ .onePasswordAccount }})"
+
+# Safe-chain initialization
+[[ -f ~/.safe-chain/scripts/init-posix.sh ]] && source ~/.safe-chain/scripts/init-posix.sh
+
+# =============================================================================
+# Final PATH cleanup (deduplicate after all sources)
+# =============================================================================
+typeset -U path

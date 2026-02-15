@@ -1,0 +1,54 @@
+#!/bin/bash
+set -euo pipefail
+
+# Install Homebrew if missing
+if ! command -v brew &>/dev/null; then
+  echo "Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+{{ if eq .chezmoi.arch "arm64" }}
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+{{ else }}
+  eval "$(/usr/local/bin/brew shellenv)"
+{{ end }}
+fi
+
+# Install packages via Brewfile
+brew bundle --file=/dev/stdin <<BREWFILE
+# Shell & Prompt
+brew "antidote"
+brew "starship"
+brew "zsh"
+
+# CLI Tools
+brew "fzf"
+brew "zoxide"
+brew "eza"
+brew "bat"
+brew "yazi"
+brew "atuin"
+brew "ranger"
+
+# Editors & Terminal
+brew "neovim"
+brew "tmux"
+
+# Version Control & Security
+brew "git"
+brew "gnupg"
+
+# Language Version Managers
+brew "nvm"
+brew "pyenv"
+brew "rbenv"
+
+# Casks
+cask "1password-cli"
+cask "ghostty"
+
+{{ if eq .machineType "work" -}}
+# Work-specific packages
+# Add work-specific brews/casks here
+{{ end -}}
+BREWFILE
+
+echo "Package installation complete!"

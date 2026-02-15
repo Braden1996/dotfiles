@@ -1,0 +1,91 @@
+# =============================================================================
+# Functions
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Yazi file picker integration
+# -----------------------------------------------------------------------------
+yazi_choose() {
+  local tmpfile="$(mktemp)"
+  yazi --chooser-file="$tmpfile" >/dev/tty
+  if [[ -f "$tmpfile" && -s "$tmpfile" ]]; then
+    LBUFFER+=$(<"$tmpfile")
+  fi
+  rm -f "$tmpfile"
+  zle redisplay
+}
+zle -N yazi_choose
+
+yazi_cd() {
+  local tmpfile="$(mktemp)"
+  yazi --chooser-file="$tmpfile" >/dev/tty
+  if [[ -f "$tmpfile" && -s "$tmpfile" ]]; then
+    local selection=$(<"$tmpfile")
+    rm -f "$tmpfile"
+    if [[ -d "$selection" ]]; then
+      cd "$selection"
+      zle reset-prompt
+    fi
+  else
+    rm -f "$tmpfile"
+  fi
+}
+zle -N yazi_cd
+
+# -----------------------------------------------------------------------------
+# Dependency check (run manually with: zsh-check-deps)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Phoenix repo nx wrapper
+# -----------------------------------------------------------------------------
+nx() {
+  local phoenix_root="{{ .chezmoi.homeDir }}/Development/Phoenix"
+  if [[ "$PWD" == "$phoenix_root"* ]]; then
+    _nvm_load && _nvm_use_if_nvmrc
+    "$phoenix_root/node_modules/.bin/nx" "$@"
+  else
+    echo "nx is only available inside the Phoenix repo ($phoenix_root)" >&2
+    return 1
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Dependency check (run manually with: zsh-check-deps)
+# -----------------------------------------------------------------------------
+zsh-check-deps() {
+  local -a required=(starship fzf)
+  local -a optional=(eza bat yazi zoxide)
+  local -a missing_required=() missing_optional=()
+  local antidote_missing=0
+
+  # Check antidote separately (installed via git, not brew)
+  if [[ ! -d "$ANTIDOTE_HOME" ]]; then
+    antidote_missing=1
+  fi
+
+  for cmd in $required; do
+    command -v $cmd &>/dev/null || missing_required+=($cmd)
+  done
+
+  for cmd in $optional; do
+    command -v $cmd &>/dev/null || missing_optional+=($cmd)
+  done
+
+  if (( antidote_missing )); then
+    print -P "%F{red}%B[zshrc]%b Missing required: antidote%f"
+    print -P "%F{yellow}  git clone --depth=1 https://github.com/mattmc3/antidote.git \${ANTIDOTE_HOME:-~/.antidote}%f"
+  fi
+
+  if (( ${#missing_required} )); then
+    print -P "%F{red}%B[zshrc]%b Missing required:%f ${(j:, :)missing_required}"
+    print -P "%F{yellow}  brew install ${(j: :)missing_required}%f"
+  fi
+
+  if (( !antidote_missing && !${#missing_required} )); then
+    print -P "%F{green}All required dependencies installed%f"
+  fi
+
+  if (( ${#missing_optional} )); then
+    print -P "%F{8}[zshrc] Optional: ${(j:, :)missing_optional} (brew install ${(j: :)missing_optional})%f"
+  fi
+}

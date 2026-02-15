@@ -1,0 +1,17 @@
+#!/bin/bash
+set -euo pipefail
+
+# Remove old Ghostty config location (now consolidated to ~/.config/ghostty/config)
+OLD_GHOSTTY="{{ .chezmoi.homeDir }}/Library/Application Support/com.mitchellh.ghostty/config"
+if [[ -f "$OLD_GHOSTTY" ]]; then
+  echo "Removing old Ghostty config at $OLD_GHOSTTY"
+  rm "$OLD_GHOSTTY"
+fi
+
+# Install TPM (tmux plugin manager) if not present
+if [[ ! -d "{{ .chezmoi.homeDir }}/.tmux/plugins/tpm" ]]; then
+  echo "Installing TPM (tmux plugin manager)..."
+  git clone https://github.com/tmux-plugins/tpm "{{ .chezmoi.homeDir }}/.tmux/plugins/tpm"
+fi
+
+echo "Post-apply configuration complete!"

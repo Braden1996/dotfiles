@@ -1,0 +1,11 @@
+README.md
+
+{{ if ne .machineType "work" }}
+.attio.gitconfig
+{{ end }}
+
+{{ if ne .chezmoi.os "darwin" }}
+Library/**
+.config/ghostty/**
+.config/iterm2/**
+{{ end }}

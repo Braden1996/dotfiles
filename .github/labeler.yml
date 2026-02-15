@@ -1,0 +1,47 @@
+shell:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'dot_zshrc'
+          - 'dot_zshenv.tmpl'
+          - 'dot_zprofile'
+          - 'dot_bashrc'
+          - 'dot_profile'
+          - 'dot_zsh_plugins.txt'
+          - 'dot_config/zsh/**'
+
+git:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'dot_gitconfig.tmpl'
+          - 'dot_attio.gitconfig'
+          - 'dot_config/private_git/**'
+
+editor:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'dot_config/nvim/**'
+          - 'dot_config/zed/**'
+
+terminal:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'dot_config/ghostty/**'
+          - 'dot_config/alacritty/**'
+          - 'dot_config/iterm2/**'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+
+tmux:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'dot_tmux.conf'
+
+chezmoi:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.chezmoi.toml.tmpl'
+          - '.chezmoiignore'
+          - 'run_once_*'
