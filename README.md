@@ -15,7 +15,7 @@ chezmoi init --apply Braden1996
 | Category | Tools |
 |----------|-------|
 | **Shell** | zsh, antidote, starship prompt, fzf, zoxide, atuin, bat, eza, yazi |
-| **Editor** | neovim, zed (templated settings) |
+| **Editor** | cursor (primary), neovim, zed |
 | **Terminal** | ghostty, alacritty, iterm2 |
 | **Git** | gpg signing, conditional work includes, aliases |
 | **Tmux** | tmux + TPM, dracula theme |
@@ -56,6 +56,8 @@ On first run, chezmoi will prompt for:
 │   ├── nvim/init.vim             # neovim config
 │   ├── atuin/config.toml         # shell history
 │   └── ...
+├── private_Library/
+│   └── .../Cursor/User/          # cursor settings & keybindings
 └── private_dot_ssh/config        # SSH config
 ```
 

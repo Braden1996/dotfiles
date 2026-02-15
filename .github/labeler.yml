@@ -21,6 +21,7 @@ editor:
       - any-glob-to-any-file:
           - 'dot_config/nvim/**'
           - 'dot_config/zed/**'
+          - 'private_Library/**/Cursor/**'
 
 terminal:
   - changed-files:
