@@ -141,7 +141,7 @@
 	"typescript.tsserver.experimental.enableProjectDiagnostics": false,
 	"typescript.tsserver.log": "off",
 	"typescript.tsserver.maxTsServerMemory": 16384,
-	"typescript.tsserver.nodePath": "/Users/braden/.nvm/versions/node/v24.11.1/bin/node",
+	"typescript.tsserver.nodePath": "{{ output "bash" "-c" "export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm which default" | trim }}",
 	"typescript.updateImportsOnFileMove.enabled": "never",
 
 	// ═══════════════════════════════════════════════════════════════════════════

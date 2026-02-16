@@ -1,4 +1,5 @@
 README.md
+assets/**
 
 {{ if ne .machineType "work" }}
 .attio.gitconfig
