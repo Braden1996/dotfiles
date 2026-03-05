@@ -7,6 +7,29 @@
 [[ -d "$HOMEBREW_PREFIX" ]] || HOMEBREW_PREFIX=/usr/local
 
 # -----------------------------------------------------------------------------
+# Cached init helper
+# -----------------------------------------------------------------------------
+# Caches "$cmd init zsh" output, regenerating only when the binary changes.
+_cached_init() {
+  local cmd=$1 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/zsh"
+  local cache_file="$cache_dir/${cmd}-init.zsh"
+  local bin_path="${commands[$cmd]}"
+
+  [[ -z "$bin_path" ]] && return 1
+  [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir"
+
+  if [[ ! -f "$cache_file" || "$bin_path" -nt "$cache_file" ]]; then
+    "$cmd" init zsh > "$cache_file" 2>/dev/null
+  fi
+  source "$cache_file"
+}
+
+# -----------------------------------------------------------------------------
+# Zoxide (cached init instead of subprocess every shell)
+# -----------------------------------------------------------------------------
+_cached_init zoxide
+
+# -----------------------------------------------------------------------------
 # FZF
 # -----------------------------------------------------------------------------
 export FZF_DEFAULT_OPTS="

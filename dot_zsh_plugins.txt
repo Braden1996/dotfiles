@@ -1,24 +1,19 @@
 # Core framework (must load first)
+mattmc3/zephyr path:plugins/helper
 mattmc3/zephyr path:plugins/prompt
 mattmc3/zephyr path:plugins/completion
 mattmc3/zephyr path:plugins/compstyle
 
-# Oh-My-Zsh plugins (selective)
-getantidote/use-omz
-ohmyzsh/ohmyzsh path:plugins/git
-ohmyzsh/ohmyzsh path:plugins/magic-enter
-ohmyzsh/ohmyzsh path:plugins/extract
-ohmyzsh/ohmyzsh path:plugins/sudo
+# Git aliases (deferred)
+ohmyzsh/ohmyzsh path:plugins/git kind:defer
 
 # Completions
 zsh-users/zsh-completions
 
 # Navigation & Search (core functionality)
-ajeetdsouza/zoxide
 zimfw/fzf
-Aloxaf/fzf-tab
-atuinsh/atuin
-jirutka/zsh-shift-select
+Aloxaf/fzf-tab kind:defer
+jirutka/zsh-shift-select kind:defer
 
 # Deferred plugins (loaded after prompt appears)
 zsh-users/zsh-autosuggestions kind:defer

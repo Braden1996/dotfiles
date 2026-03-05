@@ -16,8 +16,8 @@ continuation_prompt = "[▸▹ ](overlay1)"
 # Dimmed diamond separator between directory and git
 format = """$username$hostname$container$directory$git_branch$git_status$git_state $character"""
 
-# Right side: metadata only (time/duration)
-right_format = """$cmd_duration$time"""
+# Right side: metadata only (startup/duration/time)
+right_format = """$custom$cmd_duration$time"""
 
 # =============================================================================
 # Character Module (Runes!)
@@ -95,7 +95,8 @@ bisect = "[󰃻 BISECTING](bold peach)"
 [cmd_duration]
 format = "[󱎫 $duration]($style) "
 style = "peach"
-min_time = 2000
+min_time = 1
+show_milliseconds = true
 
 [time]
 disabled = false
@@ -319,6 +320,16 @@ Ubuntu = " "
 Unknown = " "
 Void = " "
 Windows = "󰍲 "
+
+# =============================================================================
+# Custom Modules
+# =============================================================================
+[custom.startup]
+command = "echo ${ZSH_STARTUP_MS}ms"
+when = '[ -n "$ZSH_STARTUP_MS" ]'
+format = "[󱎫 $output]($style) "
+style = "overlay1"
+shell = ["sh"]
 
 # =============================================================================
 # Color Palette (must be at the end of the file)

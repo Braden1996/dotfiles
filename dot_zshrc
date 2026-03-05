@@ -4,8 +4,17 @@
 # Modular config loaded from ~/.config/zsh/
 # To check dependencies: zsh-check-deps
 
+# Record startup start time (nanoseconds)
+zmodload zsh/datetime
+typeset -gF _ZSH_START_REAL=$EPOCHREALTIME
+
 # Source all config files in order
 for config in ~/.config/zsh/[0-9]*.zsh(N); do
   source "$config"
 done
 unset config
+
+# Calculate startup duration and export for starship
+export ZSH_STARTUP_MS=$(( (EPOCHREALTIME - _ZSH_START_REAL) * 1000 ))
+ZSH_STARTUP_MS=${ZSH_STARTUP_MS%%.*}
+unset _ZSH_START_REAL
