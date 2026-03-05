@@ -31,14 +31,14 @@ jobs:
       - name: Validate templates
         run: |
           status=0
-          for f in $(find . -name '*.tmpl' -not -path './.git/*' -not -name '.chezmoi.toml.tmpl'); do
+          while IFS= read -r -d '' f; do
             echo "--- $f"
             if ! "$HOME/bin/chezmoi" execute-template < "$f" > /dev/null 2>&1; then
               echo "FAIL: $f"
               "$HOME/bin/chezmoi" execute-template < "$f" || true
               status=1
             fi
-          done
+          done < <(find . -name '*.tmpl' -not -path './.git/*' -not -name '.chezmoi.toml.tmpl' -print0)
           exit $status
 
   lint-shell:
@@ -53,7 +53,7 @@ jobs:
       - name: Shellcheck .sh.tmpl files
         run: |
           status=0
-          for f in $(find . -name '*.sh.tmpl' -not -path './.git/*'); do
+          while IFS= read -r -d '' f; do
             echo "--- $f"
             cleaned=$(mktemp)
             sed 's/{{.*}}//g' "$f" > "$cleaned"
@@ -61,7 +61,7 @@ jobs:
               status=1
             fi
             rm "$cleaned"
-          done
+          done < <(find . -name '*.sh.tmpl' -not -path './.git/*' -print0)
           exit $status
 
       - name: Shellcheck static shell files
