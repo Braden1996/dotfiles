@@ -12,11 +12,97 @@
 
 ---
 
-### Quick Start
+One repo to carry an entire development environment between machines. Everything that can be automated is automated — packages are installed, configs are templated per machine type, and a post-apply checklist catches anything that needs manual attention (SSH keys, GPG keys, fonts). Machine-specific secrets like signing keys are prompted at init time, never hardcoded.
+
+---
+
+### New Machine Setup
+
+#### Prerequisites
+
+```bash
+xcode-select --install
+```
+
+#### 1. Install and apply
+
+If chezmoi is not yet installed (fresh machine):
+
+```bash
+sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply Braden1996
+```
+
+Or if chezmoi is already installed:
 
 ```bash
 chezmoi init --apply Braden1996
 ```
+
+#### 2. Init prompts
+
+You'll be prompted for these values (stored locally, never committed):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `machineType` | `personal` or `work` | `work` |
+| `gitName` | Git author name | `Braden Marshall` |
+| `personalEmail` | Personal email for git | `me@bradenm.co.uk` |
+| `workEmail` | Work email (work machines only) | `braden@attio.com` |
+| `onePasswordAccount` | 1Password account domain | `my.1password.com` |
+| `gpgKeyPersonalEmail` | GPG signing key ID for your personal email | `38D2DE75C7CD663D` |
+| `gpgKeyWorkEmail` | GPG signing key ID for your work email (work only) | `9BD932BC6F57FB4E` |
+
+> **Tip:** If you haven't generated your GPG keys yet, leave the signing key fields blank. Generate them in the next step and then re-run `chezmoi init` to fill them in.
+
+#### 3. What happens automatically
+
+- **Homebrew** is installed if missing (with Apple Silicon detection)
+- **Packages** are installed via Brewfile — shell tools, editors, language managers, 1Password CLI, Ghostty
+- **Configs** are templated and written to `~` — git, zsh, starship, editors, terminal, tmux, SSH
+- **TPM** (tmux plugin manager) is cloned if not present
+- **Post-setup checklist** runs and flags anything that still needs manual attention
+
+#### 4. Post-setup manual steps
+
+The setup checklist will tell you what's missing, but here's the full list:
+
+**Generate an SSH key and add it to GitHub:**
+
+```bash
+ssh-keygen -t ed25519 -C "your-email@example.com"
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+pbcopy < ~/.ssh/id_ed25519.pub
+# Add at: https://github.com/settings/ssh/new
+```
+
+**Generate a GPG key and add it to GitHub:**
+
+```bash
+gpg --full-generate-key          # choose Ed25519, use your git email
+gpg --list-secret-keys --keyid-format=long   # note the key ID
+gpg --armor --export YOUR_KEY_ID | pbcopy
+# Add at: https://github.com/settings/gpg/new
+```
+
+Then re-run `chezmoi init` to set the key ID in your config.
+
+**Other manual steps:**
+
+- **1Password** — sign in with `op signin`
+- **Nerd Font** — install [FiraCode Nerd Font](https://www.nerdfonts.com/) (used by editors, starship, terminal)
+- **Tmux plugins** — open tmux and press `prefix + I`
+- **Neovim plugins** — open nvim and run `:PlugInstall`
+
+#### 5. Verify
+
+```bash
+ssh -T git@github.com            # SSH works
+echo "test" | gpg --clearsign    # GPG signing works
+zsh-check-deps                   # all tools installed
+```
+
+---
 
 ### What's Included
 
@@ -88,26 +174,14 @@ Template validation via chezmoi, shellcheck linting (SC1090/SC1091 excluded), JS
 Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and optional ones (eza, bat, yazi, zoxide, antidote) with color-coded output and install hints.
 </details>
 
-### Init Prompts
-
-On first run, chezmoi will prompt for:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `machineType` | `personal` or `work` | `personal` |
-| `gitName` | Git author name | `Braden Marshall` |
-| `personalEmail` | Personal email for git | `braden@example.com` |
-| `workEmail` | Work email (work machines only) | `braden@company.com` |
-| `onePasswordAccount` | 1Password account URL | `my.1password.com` |
-
 ### Structure
 
 ```
 .
-├── .chezmoi.toml.tmpl              # prompted config
+├── .chezmoi.toml.tmpl              # prompted config (machine type, emails, GPG keys)
 ├── .chezmoiignore                  # conditional ignores
-├── dot_gitconfig.tmpl              # git config (templated)
-├── dot_attio.gitconfig             # work-specific git config
+├── dot_gitconfig.tmpl              # git config (templated signing key)
+├── dot_attio.gitconfig.tmpl        # work-specific git config (templated)
 ├── dot_zshrc                       # main zsh entry
 ├── dot_zshenv.tmpl                 # zsh environment
 ├── dot_zprofile                    # login shell setup
@@ -117,8 +191,8 @@ On first run, chezmoi will prompt for:
 ├── dot_bashrc                      # bash fallback
 ├── dot_profile                     # POSIX profile
 ├── empty_dot_hushlogin             # suppress login banner
-├── run_once_before_*.sh.tmpl       # homebrew bootstrap
-├── run_once_after_*.sh.tmpl        # post-apply setup
+├── run_once_before_*.sh.tmpl       # homebrew + package bootstrap
+├── run_once_after_*.sh.tmpl        # post-apply setup + checklist
 ├── dot_config/
 │   ├── zsh/                        # modular zsh configs (00-99)
 │   │   ├── 00-path.zsh             #   PATH management
@@ -145,18 +219,14 @@ On first run, chezmoi will prompt for:
 └── private_dot_ssh/config          # SSH (ed25519, keychain)
 ```
 
-### Manual Steps
-
-After `chezmoi apply`, a few things need manual setup:
-
-1. **1Password** - sign in to your account (`op signin`)
-2. **GPG key** - import your signing key and trust it
-3. **Nerd Font** - install FiraCode Nerd Font (used by zed, starship)
-4. **Tmux plugins** - open tmux and press `prefix + I` to install plugins
-5. **Neovim plugins** - open nvim and run `:PlugInstall`
-
-### Updating
+### Common Commands
 
 ```bash
-chezmoi update
+chezmoi update          # pull latest changes and apply
+chezmoi diff            # preview what would change
+chezmoi apply           # apply without pulling
+chezmoi edit ~/.zshrc   # edit a managed file in the source dir
+chezmoi add ~/.config/foo/bar   # start managing a new file
+chezmoi cd              # cd into the source directory
+chezmoi init            # re-run prompts (e.g. after generating a GPG key)
 ```

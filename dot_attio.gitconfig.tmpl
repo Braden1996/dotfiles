@@ -1,4 +1,6 @@
 [user]
-	name = Braden Marshall
-	email = braden@attio.com
-  signingkey = 9BD932BC6F57FB4E
+	name = {{ .gitName }}
+	email = {{ .workEmail }}
+{{- if ne .gpgKeyWorkEmail "" }}
+  signingkey = {{ .gpgKeyWorkEmail }}
+{{- end }}

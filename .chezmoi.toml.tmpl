@@ -6,6 +6,11 @@
 {{-   $workEmail = promptStringOnce . "workEmail" "Work email address" -}}
 {{- end -}}
 {{- $onePasswordAccount := promptStringOnce . "onePasswordAccount" "1Password account (e.g. my.1password.com)" -}}
+{{- $gpgKeyPersonalEmail := promptStringOnce . "gpgKeyPersonalEmail" (printf "GPG signing key ID for %s (blank if not yet generated)" $personalEmail) -}}
+{{- $gpgKeyWorkEmail := "" -}}
+{{- if eq $machineType "work" -}}
+{{-   $gpgKeyWorkEmail = promptStringOnce . "gpgKeyWorkEmail" (printf "GPG signing key ID for %s (blank if not yet generated)" $workEmail) -}}
+{{- end -}}
 
 [data]
   machineType = {{ $machineType | quote }}
@@ -13,6 +18,8 @@
   personalEmail = {{ $personalEmail | quote }}
   workEmail = {{ $workEmail | quote }}
   onePasswordAccount = {{ $onePasswordAccount | quote }}
+  gpgKeyPersonalEmail = {{ $gpgKeyPersonalEmail | quote }}
+  gpgKeyWorkEmail = {{ $gpgKeyWorkEmail | quote }}
 
 [onepassword]
   command = "op"

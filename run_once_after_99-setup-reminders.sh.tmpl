@@ -1,0 +1,92 @@
+#!/bin/bash
+set -euo pipefail
+
+echo ""
+echo "============================================"
+echo "  Post-Setup Checklist"
+echo "============================================"
+echo ""
+
+all_good=true
+
+# --- SSH Key ---
+if [[ -f "{{ .chezmoi.homeDir }}/.ssh/id_ed25519.pub" ]]; then
+  echo "[ok] SSH key found"
+else
+  all_good=false
+  echo "[!!] No SSH key found"
+  echo "     Generate one:"
+  echo "       ssh-keygen -t ed25519 -C \"{{ .personalEmail }}\""
+  echo "     Then add it to GitHub:"
+  echo "       pbcopy < ~/.ssh/id_ed25519.pub"
+  echo "       https://github.com/settings/ssh/new"
+  echo ""
+fi
+
+# --- GPG Key ---
+if command -v gpg &>/dev/null; then
+  if gpg --list-secret-keys --keyid-format=long 2>/dev/null | grep -q sec; then
+    echo "[ok] GPG secret key found"
+{{ if ne .gpgKeyPersonalEmail "" -}}
+    echo "[ok] GPG key for {{ .personalEmail }} configured ({{ .gpgKeyPersonalEmail }})"
+{{ else -}}
+    echo "[!!] GPG key for {{ .personalEmail }} not configured in chezmoi"
+    echo "     List your keys:  gpg --list-secret-keys --keyid-format=long"
+    echo "     Then re-run:     chezmoi init"
+    echo ""
+    all_good=false
+{{ end -}}
+{{ if eq .machineType "work" -}}
+{{ if ne .gpgKeyWorkEmail "" -}}
+    echo "[ok] GPG key for {{ .workEmail }} configured ({{ .gpgKeyWorkEmail }})"
+{{ else -}}
+    echo "[!!] GPG key for {{ .workEmail }} not configured in chezmoi"
+    echo "     List your keys:  gpg --list-secret-keys --keyid-format=long"
+    echo "     Then re-run:     chezmoi init"
+    echo ""
+    all_good=false
+{{ end -}}
+{{ end -}}
+  else
+    all_good=false
+    echo "[!!] No GPG secret key found"
+    echo "     Generate one:"
+    echo "       gpg --full-generate-key"
+    echo "     Export and add to GitHub:"
+    echo "       gpg --armor --export YOUR_KEY_ID | pbcopy"
+    echo "       https://github.com/settings/gpg/new"
+    echo "     Then re-run chezmoi init to set the key ID"
+    echo ""
+  fi
+else
+  all_good=false
+  echo "[!!] GPG is not installed"
+  echo "     Install it: brew install gnupg"
+  echo ""
+fi
+
+# --- 1Password CLI ---
+if command -v op &>/dev/null; then
+  echo "[ok] 1Password CLI installed"
+else
+  all_good=false
+  echo "[!!] 1Password CLI not installed"
+  echo "     Install it: brew install 1password-cli"
+  echo ""
+fi
+
+# --- Nerd Font ---
+if fc-list 2>/dev/null | grep -qi "nerd" || system_profiler SPFontsDataType 2>/dev/null | grep -qi "FiraCode Nerd"; then
+  echo "[ok] Nerd Font detected"
+else
+  echo "[--] Could not detect Nerd Font (install FiraCode Nerd Font for full experience)"
+fi
+
+if $all_good; then
+  echo ""
+  echo "All good! No manual steps needed."
+fi
+
+echo ""
+echo "============================================"
+echo ""

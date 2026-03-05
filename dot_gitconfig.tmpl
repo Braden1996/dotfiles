@@ -10,7 +10,9 @@
 [user]
 	name = {{ .gitName }}
 	email = {{ .personalEmail }}
-  signingkey = E6F450DCE321E932
+{{- if ne .gpgKeyPersonalEmail "" }}
+  signingkey = {{ .gpgKeyPersonalEmail }}
+{{- end }}
 {{ if eq .machineType "work" -}}
 [includeIf "gitdir:~/Development/Phoenix/"]
     path = ~/.attio.gitconfig
@@ -21,6 +23,7 @@
 	defaultBranch = master
 [push]
 	default = current
+{{- if ne .gpgKeyPersonalEmail "" }}
 [commit]
 	gpgsign = true
 [gpg]
@@ -31,6 +34,7 @@
 {{- end }}
 [tag]
 	forceSignAnnotated = true
+{{- end }}
 [pull]
 	default = current
 	rebase = false
