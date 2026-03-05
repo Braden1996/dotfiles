@@ -4,23 +4,23 @@ mattmc3/zephyr path:plugins/prompt
 mattmc3/zephyr path:plugins/completion
 mattmc3/zephyr path:plugins/compstyle
 
-# Git aliases (deferred)
-ohmyzsh/ohmyzsh path:plugins/git kind:defer
+# Git aliases
+ohmyzsh/ohmyzsh path:plugins/git
 
 # Completions
 zsh-users/zsh-completions
 
 # Navigation & Search (core functionality)
 zimfw/fzf
-Aloxaf/fzf-tab kind:defer
-jirutka/zsh-shift-select kind:defer
+Aloxaf/fzf-tab
+jirutka/zsh-shift-select
 
-# Deferred plugins (loaded after prompt appears)
-zsh-users/zsh-autosuggestions kind:defer
-hlissner/zsh-autopair kind:defer
-MichaelAquilina/zsh-you-should-use kind:defer
-wfxr/forgit kind:defer
+# Interactive plugins
+zsh-users/zsh-autosuggestions
+hlissner/zsh-autopair
+MichaelAquilina/zsh-you-should-use
+wfxr/forgit
 
 # Syntax highlighting - skip if using Warp (has built-in highlighting)
 # To disable: comment out the line below and regenerate plugins
-zdharma-continuum/fast-syntax-highlighting kind:defer
+zdharma-continuum/fast-syntax-highlighting

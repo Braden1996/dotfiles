@@ -1,6 +1,10 @@
-. "$HOME/.cargo/env"
-{{ if eq .chezmoi.arch "arm64" -}}
-ANTIDOTE_HOME="/opt/homebrew/opt/antidote/share/antidote"
-{{ else -}}
-ANTIDOTE_HOME="/usr/local/opt/antidote/share/antidote"
-{{ end -}}
+if [[ -d "$HOME/.cargo/bin" ]] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+ANTIDOTE_HOME="${XDG_CACHE_HOME:-$HOME/Library/Caches}/antidote"
+
+# Record interactive shell startup from the earliest user startup file.
+if [[ -o interactive ]]; then
+  zmodload zsh/datetime 2>/dev/null
+  typeset -gF _ZSH_START_REAL=$EPOCHREALTIME
+fi

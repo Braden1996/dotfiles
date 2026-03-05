@@ -3,11 +3,11 @@
 # =============================================================================
 # Machine-specific configuration that shouldn't be committed
 
-# Nx completion (deferred)
-zsh-defer -c '[ -s "$HOME/.nx-completion/nx-completion.plugin.zsh" ] && source "$HOME/.nx-completion/nx-completion.plugin.zsh"'
+# Nx completion
+[[ -s "$HOME/.nx-completion/nx-completion.plugin.zsh" ]] && source "$HOME/.nx-completion/nx-completion.plugin.zsh"
 
-# Bun completions (deferred)
-zsh-defer -c '[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"'
+# Bun completions
+[[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
 
 # 1Password-backed secrets
 # To enable 1Password integration, uncomment and adjust the op:// URIs below.
@@ -17,7 +17,7 @@ zsh-defer -c '[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"'
 # Safe-chain initialization
 [[ -f ~/.safe-chain/scripts/init-posix.sh ]] && source ~/.safe-chain/scripts/init-posix.sh
 
-# Clear startup time after first command so it only shows on the initial prompt
+# Clear startup time after first command so it only shows on the initial prompt.
 _clear_startup_time() {
   unset ZSH_STARTUP_MS
   add-zsh-hook -d preexec _clear_startup_time

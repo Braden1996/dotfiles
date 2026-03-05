@@ -46,8 +46,8 @@ fi
 # Yazi file picker
 bindkey '^y' yazi_choose  # Ctrl+y triggers yazi-based "completion"
 
-# Clipboard support for zsh-shift-select (deferred with the plugin)
-zsh-defer -c '
+# Clipboard support for zsh-shift-select
+if bindkey -M shift-select >/dev/null 2>&1; then
   shift-select-copy() {
     if (( REGION_ACTIVE )); then
       zle copy-region-as-kill
@@ -58,7 +58,7 @@ zsh-defer -c '
   }
   zle -N shift-select-copy
   bindkey -M shift-select "^[[99;9u" shift-select-copy
-'
+fi
 
 # Debug: test if Ghostty sequence arrives at all (bind in main keymap too)
 debug-ghostty-seq() {

@@ -6,6 +6,11 @@
 STARSHIP_PROMPT_NEED_NEWLINE=false
 zstyle ':zephyr:plugin:prompt' theme 'starship'
 zstyle ':zephyr:plugin:prompt' use-cache yes
+zstyle ':zephyr:plugin:prompt' immediate yes
+
+# Completion configuration
+zstyle ':zephyr:plugin:completion' use-cache yes
+zstyle ':zephyr:plugin:completion' immediate yes
 
 # Magic enter configuration (must be before magic-enter plugin loads)
 MAGIC_ENTER_GIT_COMMAND="git status -u ."
@@ -18,21 +23,25 @@ ZSH_AUTOSUGGEST_MANUAL_REBIND=1
 
 # Set ANTIDOTE_HOME default if not set (Homebrew, then git clone fallback)
 if [[ -z "$ANTIDOTE_HOME" ]]; then
-  if [[ -d "${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote" ]]; then
-    ANTIDOTE_HOME="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote"
-  else
-    ANTIDOTE_HOME="${ZDOTDIR:-$HOME}/.antidote"
-  fi
+  ANTIDOTE_HOME="${XDG_CACHE_HOME:-$HOME/Library/Caches}/antidote"
 fi
 
 # Load antidote (with error handling)
-if [[ -f "$ANTIDOTE_HOME/antidote.zsh" ]]; then
-  source "$ANTIDOTE_HOME/antidote.zsh"
+local antidote_script=""
+if [[ -f "${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote/antidote.zsh" ]]; then
+  antidote_script="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote/antidote.zsh"
+elif [[ -f "$ANTIDOTE_HOME/antidote.zsh" ]]; then
+  antidote_script="$ANTIDOTE_HOME/antidote.zsh"
+fi
+
+if [[ -n "$antidote_script" ]]; then
+  source "$antidote_script"
 else
-  print -P "%F{red}[zshrc] antidote not found at $ANTIDOTE_HOME%f" >&2
+  print -P "%F{red}[zshrc] antidote not found (cache: $ANTIDOTE_HOME)%f" >&2
   print -P "%F{yellow}  Install: brew install antidote%f" >&2
   return 1
 fi
+unset antidote_script
 
 # Static plugin loading (faster than dynamic)
 # Regenerate with: antidote bundle < ~/.zsh_plugins.txt > ~/.zsh_plugins.zsh
