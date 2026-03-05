@@ -24,6 +24,7 @@ window-decoration = true
 window-title-font-family = "SF Pro Rounded"
 macos-titlebar-style = tabs
 macos-window-shadow = true
+macos-option-as-alt = true
 
 # -----------------------------------------------------------------------------
 # Background & Transparency
@@ -69,5 +70,17 @@ desktop-notifications = true
 # -----------------------------------------------------------------------------
 # Keybinds
 # -----------------------------------------------------------------------------
+keybind = shift+arrow_left=csi:1;2D
+keybind = shift+arrow_right=csi:1;2C
+keybind = shift+arrow_up=csi:1;2A
+keybind = shift+arrow_down=csi:1;2B
+keybind = shift+home=csi:1;2H
+keybind = shift+end=csi:1;2F
+keybind = alt+shift+arrow_left=csi:1;4D
+keybind = alt+shift+arrow_right=csi:1;4C
+keybind = super+shift+arrow_left=csi:1;2H
+keybind = super+shift+arrow_right=csi:1;2F
+keybind = super+shift+home=csi:1;2H
+keybind = super+shift+end=csi:1;2F
 keybind = super+c=csi:99;9u
 keybind = super+v=paste_from_clipboard
