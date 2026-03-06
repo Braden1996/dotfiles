@@ -6,7 +6,7 @@
   <a href="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml"><img src="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" /></a>
   <a href="https://www.chezmoi.io/"><img src="https://img.shields.io/badge/managed%20with-chezmoi-blue?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwgAADsIBFShKgAAAABl0RVh0U29mdHdhcmUAcGFpbnQubmV0IDQuMC4xMkMEa+wAAALzSURBVFhH7ZVfSFNRHMfPuf+2e527u5pm4pyi5r+0P2amkdqDPfRQUBA99BBFBBJE0ENQD0FBDxH0EEHRQxBBDz0EEUR/KCKxP2plZaalZmpuc3N3t3t37t09945tOrfmQ0Tf4eOc3z2/3+97zj33Xor+RyD/CuAXgMfjuUqS5EWKou6jKGq7uq4xRqNxllar7dRoNIdJkjwEoFW3NgBJkjPALi/lm/1+f7vL5XpGfV6ySZyOEI8bOBWq/UMRVEbNnWfpumVRqPxqE6n22ez2a5RFHVQXRZAEAS/JEl9fr+/1ev17qbe8sVMC+gIguBomq40m80nDAZDB0EQVdLS6LcMwwx4PJ7nHo/nPvV6IcZpwRMIBF66XK5blNP5gJFWfAy4a7FYOo1G41mSJOvkJwBCLMuOuN3uh263+5akKKhDoH6YO6Cy+gZxr8tms922Wq0d8jKiEDzHjbnd7kcul+smdYF7x8v0gWBw0u/3v3S73Q+oN/wYp0UBxJlP+3w+AYi7FEWdQf//5fV6h51O53uHw/GGekC/FxjGhX0Bh8NxraCg4GJFRUW7TqfbhM+4LvZ8Nm63+wXu41sWi6VbvkAE0DTNK0bwBDxvNZvNl4uLiy/k5OQ0SSGE3DjAMEy/0+l84nQ6H1N9fCfnkz7x4UbFYPBaXl5eW0FBwUWz2bxPWZw1+G7+1mKx3KJelncpJRWAyIciETsOhAOBwC8ZZnB8fPyx1Wr9k4rYbsiyH8Trnf8B6L3e22fE15JcBGhJjuO4oUAg0OfxeHoWL17cNmfOnAsZGRl1CMHjOMBx3LjP57s/NjZ2i+rjB+Xz0D7pJRfLPcR9TrdDsCWDZnNmZuYFo9F4Gp9zOEDZjIO4Z8Dtdt8eGxu7S/XyY/LVUGepIXkEiHPUbPRdfLhpvV5/ICUl5TRBEBU4gO/N3+DzdGIeeWVOkf7EF8IVhN9FHiCv+Bj5RHUmk4EupqWlnTYYDOdwU/b7J4A/wLb9G6D9BjAbx3rEbxFDAAAAAElFTkSuQmCC" alt="chezmoi" /></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS" />
-  <img src="https://img.shields.io/badge/shell-zsh-green?logo=gnubash" alt="zsh" />
+  <img src="https://img.shields.io/badge/shell-zsh%20%2B%20fish-green?logo=gnubash" alt="zsh + fish" />
   <img src="https://img.shields.io/badge/theme-Catppuccin%20Macchiato%20%2F%20Dracula-mauve?logo=catppuccin&logoColor=cba6f7" alt="Catppuccin Macchiato / Dracula" />
 </p>
 
@@ -58,7 +58,7 @@ You'll be prompted for these values (stored locally, never committed):
 
 - **Homebrew** is installed if missing (with Apple Silicon detection)
 - **Packages** are installed via Brewfile — shell tools, editors, language managers, 1Password CLI, Ghostty
-- **Configs** are templated and written to `~` — git, zsh, starship, editors, terminal, tmux, SSH
+- **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux, SSH
 - **TPM** (tmux plugin manager) is cloned if not present
 - **Post-setup checklist** runs and flags anything that still needs manual attention
 
@@ -100,6 +100,7 @@ Then re-run `chezmoi init` to set the key ID in your config.
 ssh -T git@github.com            # SSH works
 echo "test" | gpg --clearsign    # GPG signing works
 zsh-check-deps                   # all tools installed
+fish-check-deps                  # fish prompt/tooling dependencies installed
 ```
 
 ---
@@ -107,14 +108,14 @@ zsh-check-deps                   # all tools installed
 ### What's Included
 
 <table>
-<tr><td><b>Shell</b></td><td>zsh, antidote, starship prompt, fzf, zoxide, atuin, bat, eza, yazi</td></tr>
+<tr><td><b>Shell</b></td><td>zsh, fish, antidote, starship prompt, fzf, zoxide, bat, eza, yazi</td></tr>
 <tr><td><b>Editor</b></td><td>cursor (primary), neovim, zed</td></tr>
 <tr><td><b>Terminal</b></td><td>ghostty, alacritty, iterm2</td></tr>
 <tr><td><b>Git</b></td><td>gpg signing, graphite, conditional work includes, aliases</td></tr>
 <tr><td><b>Tmux</b></td><td>tmux + TPM, dracula theme</td></tr>
 <tr><td><b>Files</b></td><td>yazi (Ctrl+y picker), ranger</td></tr>
 <tr><td><b>Languages</b></td><td>nvm, pyenv, rbenv (all lazy-loaded), bun</td></tr>
-<tr><td><b>Security</b></td><td>1Password CLI (<code>op://</code> URIs), GPG commit signing, atuin secrets filter</td></tr>
+<tr><td><b>Security</b></td><td>1Password CLI (<code>op://</code> URIs), GPG commit signing</td></tr>
 <tr><td><b>Theme</b></td><td>Catppuccin Macchiato (ghostty, zed, starship, fzf, fsh) / Dracula (alacritty, iterm2, nvim, tmux)</td></tr>
 </table>
 
@@ -194,6 +195,7 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 ├── run_once_before_*.sh.tmpl       # homebrew + package bootstrap
 ├── run_once_after_*.sh.tmpl        # post-apply setup + checklist
 ├── dot_config/
+│   ├── fish/                       # fish config (prompt, bindings, wrappers)
 │   ├── zsh/                        # modular zsh configs (00-99)
 │   │   ├── 00-path.zsh             #   PATH management
 │   │   ├── 10-options.zsh          #   shell options & history
@@ -209,7 +211,6 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   ├── iterm2/Default.json         # iterm2 profile
 │   ├── starship.toml               # prompt (catppuccin palette)
 │   ├── nvim/init.vim               # neovim (dracula, plug)
-│   ├── atuin/config.toml           # shell history sync
 │   ├── fsh/                        # fast-syntax-highlighting theme
 │   ├── ranger/                     # file manager + devicons
 │   ├── graphite/aliases            # git stacking aliases
@@ -225,7 +226,8 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 chezmoi update          # pull latest changes and apply
 chezmoi diff            # preview what would change
 chezmoi apply           # apply without pulling
-chezmoi edit ~/.zshrc   # edit a managed file in the source dir
+chezmoi edit ~/.zshrc                # edit zsh entrypoint
+chezmoi edit ~/.config/fish/config.fish   # edit fish entrypoint
 chezmoi add ~/.config/foo/bar   # start managing a new file
 chezmoi cd              # cd into the source directory
 chezmoi init            # re-run prompts (e.g. after generating a GPG key)

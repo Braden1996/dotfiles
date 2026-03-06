@@ -1,0 +1,21 @@
+# =============================================================================
+# Local Overrides & External Tools
+# =============================================================================
+
+# 1Password-backed secrets
+# To enable 1Password integration, uncomment and adjust the op:// URI below.
+# Requires `op` CLI to be installed and configured.
+# set -gx NGROK_AUTHTOKEN (op read 'op://Private/ngrok/credential' --account {{ .onePasswordAccount }})
+
+if status is-interactive
+    __braden_nvm_sync_env >/dev/null 2>/dev/null
+
+    if set -q __BRADEN_SHELL_START_REAL
+        if command -q python3
+            set -l shell_start_now (command python3 -c 'import time; print(f"{time.time():.6f}")')
+            set -gx ZSH_STARTUP_MS (math -s0 "($shell_start_now - $__BRADEN_SHELL_START_REAL) * 1000")
+        end
+
+        set -e __BRADEN_SHELL_START_REAL
+    end
+end

@@ -1,0 +1,424 @@
+# =============================================================================
+# Functions
+# =============================================================================
+
+function __braden_find_up --argument-names filename start_dir
+    set -l dir $start_dir
+
+    while true
+        if test -e "$dir/$filename"
+            echo "$dir/$filename"
+            return 0
+        end
+
+        if test "$dir" = /
+            return 1
+        end
+
+        set dir (path dirname "$dir")
+    end
+end
+
+function __braden_print_safe_chain_warning --argument-names original_cmd
+    if set -q __BRADEN_SAFE_CHAIN_WARNED
+        return
+    end
+
+    set -g __BRADEN_SAFE_CHAIN_WARNED 1
+
+    set_color -b yellow black
+    printf "Warning:"
+    set_color normal
+    printf " safe-chain is not available to protect you from installing malware. %s will run without it.\n" $original_cmd
+    printf "Install safe-chain by using "
+    set_color cyan
+    printf "npm install -g @aikidosec/safe-chain"
+    set_color normal
+    printf ".\n"
+end
+
+function __braden_safe_chain_exec --argument-names original_cmd
+    set -l cmd_args $argv[2..-1]
+
+    if command -q safe-chain
+        safe-chain $original_cmd $cmd_args
+    else
+        __braden_print_safe_chain_warning $original_cmd
+        command $original_cmd $cmd_args
+    end
+end
+
+function __braden_nvm_script
+    for script in \
+        "$HOMEBREW_PREFIX/opt/nvm/nvm.sh" \
+        /opt/homebrew/opt/nvm/nvm.sh \
+        /usr/local/opt/nvm/nvm.sh
+        if test -s "$script"
+            echo "$script"
+            return 0
+        end
+    end
+
+    return 1
+end
+
+function __braden_nvm_sync_env
+    set -l nvm_script (__braden_nvm_script)
+    or return 1
+
+    set -gx NVM_DIR "$HOME/.nvm"
+
+    set -l nvmrc (__braden_find_up .nvmrc $PWD)
+    or begin
+        set -e __BRADEN_NVMRC_PATH
+        return 1
+    end
+
+    if set -q __BRADEN_NVMRC_PATH
+        if test "$__BRADEN_NVMRC_PATH" = "$nvmrc"
+            return 0
+        end
+    end
+
+    set -l output (bash -lc '
+        cd "$1" || exit 1
+        export NVM_DIR="$HOME/.nvm"
+        . "$2"
+        nvm use --silent >/dev/null 2>&1 || exit 1
+        printf "PATH=%s\n" "$PATH"
+        printf "NVM_BIN=%s\n" "${NVM_BIN:-}"
+        printf "NVM_INC=%s\n" "${NVM_INC:-}"
+    ' bash "$PWD" "$nvm_script")
+    or return 1
+
+    for line in $output
+        switch $line
+            case 'PATH=*'
+                set -gx PATH (string split : -- (string sub -s 6 -- $line))
+            case 'NVM_BIN=*'
+                set -gx NVM_BIN (string sub -s 9 -- $line)
+            case 'NVM_INC=*'
+                set -gx NVM_INC (string sub -s 9 -- $line)
+        end
+    end
+
+    set -gx __BRADEN_NVMRC_PATH $nvmrc
+end
+
+function __braden_nvm_exec --argument-names command_name
+    set -l nvm_script (__braden_nvm_script)
+    set -l cmd_args $argv[2..-1]
+    or begin
+        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
+        return 1
+    end
+
+    set -gx NVM_DIR "$HOME/.nvm"
+
+    bash -lc '
+        cd "$1" || exit 1
+        export NVM_DIR="$HOME/.nvm"
+        . "$2"
+        nvmrc_path="$(nvm_find_nvmrc 2>/dev/null)" || nvmrc_path=""
+        if [ -n "$nvmrc_path" ]; then
+            nvm use --silent >/dev/null 2>&1 || exit 1
+        fi
+        shift 2
+        "$@"
+    ' bash "$PWD" "$nvm_script" "$command_name" $cmd_args
+    set -l exit_code $status
+
+    if test $exit_code -eq 0
+        __braden_nvm_sync_env >/dev/null 2>/dev/null
+    end
+
+    return $exit_code
+end
+
+function __braden_nvm_exec_safe_chain --argument-names command_name
+    set -l nvm_script (__braden_nvm_script)
+    set -l cmd_args $argv[2..-1]
+    or begin
+        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
+        return 1
+    end
+
+    set -gx NVM_DIR "$HOME/.nvm"
+
+    bash -lc '
+        cd "$1" || exit 1
+        export NVM_DIR="$HOME/.nvm"
+        . "$2"
+        nvmrc_path="$(nvm_find_nvmrc 2>/dev/null)" || nvmrc_path=""
+        if [ -n "$nvmrc_path" ]; then
+            nvm use --silent >/dev/null 2>&1 || exit 1
+        fi
+        shift 2
+        if command -v safe-chain >/dev/null 2>&1; then
+            safe-chain "$@"
+        else
+            "$@"
+        fi
+    ' bash "$PWD" "$nvm_script" "$command_name" $cmd_args
+    set -l exit_code $status
+
+    if test $exit_code -eq 0
+        __braden_nvm_sync_env >/dev/null 2>/dev/null
+    end
+
+    return $exit_code
+end
+
+function __braden_nvm_auto_use --on-variable PWD
+    status is-interactive; or return
+    __braden_nvm_sync_env >/dev/null 2>/dev/null
+end
+
+function nvm
+    set -l nvm_script (__braden_nvm_script)
+    or begin
+        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
+        return 1
+    end
+
+    set -gx NVM_DIR "$HOME/.nvm"
+
+    bash -lc '
+        cd "$1" || exit 1
+        export NVM_DIR="$HOME/.nvm"
+        . "$2"
+        shift 2
+        nvm "$@"
+    ' bash "$PWD" "$nvm_script" $argv
+    set -l exit_code $status
+
+    if test $exit_code -eq 0
+        __braden_nvm_sync_env >/dev/null 2>/dev/null
+    end
+
+    return $exit_code
+end
+
+function node
+    __braden_nvm_exec node $argv
+end
+
+function npm
+    if test (count $argv) -eq 1
+        switch $argv[1]
+            case -v --version
+                __braden_nvm_exec npm $argv
+                return
+        end
+    end
+
+    __braden_nvm_exec_safe_chain npm $argv
+end
+
+function pyenv
+    functions -e pyenv
+
+    if command -q pyenv
+        set -gx PYENV_ROOT "$HOME/.pyenv"
+        fish_add_path -gPm "$PYENV_ROOT/bin"
+        pyenv init - fish | source
+    end
+
+    pyenv $argv
+end
+
+function rbenv
+    functions -e rbenv
+
+    if test -x "$HOMEBREW_PREFIX/bin/rbenv"
+        "$HOMEBREW_PREFIX/bin/rbenv" init - fish | source
+    else if command -q rbenv
+        rbenv init - fish | source
+    end
+
+    rbenv $argv
+end
+
+function npx
+    __braden_nvm_exec_safe_chain npx $argv
+end
+
+function yarn
+    __braden_nvm_exec_safe_chain yarn $argv
+end
+
+function pnpm
+    __braden_nvm_exec_safe_chain pnpm $argv
+end
+
+function pnpx
+    __braden_safe_chain_exec pnpx $argv
+end
+
+function bun
+    __braden_safe_chain_exec bun $argv
+end
+
+function bunx
+    __braden_safe_chain_exec bunx $argv
+end
+
+function pip
+    __braden_safe_chain_exec pip $argv
+end
+
+function pip3
+    __braden_safe_chain_exec pip3 $argv
+end
+
+function python
+    __braden_safe_chain_exec python $argv
+end
+
+function python3
+    __braden_safe_chain_exec python3 $argv
+end
+
+function pipx
+    __braden_safe_chain_exec pipx $argv
+end
+
+function uv
+    __braden_safe_chain_exec uv $argv
+end
+
+function poetry
+    __braden_safe_chain_exec poetry $argv
+end
+
+function yazi_choose
+    set -l tmpfile (mktemp)
+    yazi --chooser-file="$tmpfile" >/dev/tty
+
+    if test -s "$tmpfile"
+        set -l selection (cat "$tmpfile")
+        commandline --insert -- (string escape -- $selection)
+    end
+
+    rm -f "$tmpfile"
+    commandline -f repaint
+end
+
+function yazi_cd
+    set -l tmpfile (mktemp)
+    yazi --chooser-file="$tmpfile" >/dev/tty
+
+    if test -s "$tmpfile"
+        set -l selection (cat "$tmpfile")
+        if test -d "$selection"
+            cd "$selection"
+        end
+    end
+
+    rm -f "$tmpfile"
+    commandline -f repaint
+end
+
+function nx
+    set -l phoenix_root "{{ .chezmoi.homeDir }}/Development/Phoenix"
+
+    if string match -q -- "$phoenix_root*" "$PWD"
+        __braden_nvm_sync_env >/dev/null 2>/dev/null
+        "$phoenix_root/node_modules/.bin/nx" $argv
+    else
+        echo "nx is only available inside the Phoenix repo ($phoenix_root)" >&2
+        return 1
+    end
+end
+
+function fish-check-deps
+    set -l required starship fzf
+    set -l optional eza bat yazi zoxide
+    set -l missing_required
+    set -l missing_optional
+
+    for cmd in $required
+        command -q $cmd; or set -a missing_required $cmd
+    end
+
+    for cmd in $optional
+        command -q $cmd; or set -a missing_optional $cmd
+    end
+
+    if test (count $missing_required) -gt 0
+        set_color red
+        echo "[fish] Missing required: "(string join ", " -- $missing_required)
+        set_color yellow
+        echo "  brew install "(string join " " -- $missing_required)
+        set_color normal
+    else
+        set_color green
+        echo "All required dependencies installed"
+        set_color normal
+    end
+
+    if test (count $missing_optional) -gt 0
+        set_color brblack
+        echo "[fish] Optional: "(string join ", " -- $missing_optional)" (brew install "(string join " " -- $missing_optional)")"
+        set_color normal
+    end
+end
+
+function __braden_magic_enter
+    set -l buffer (string trim -- (commandline))
+
+    if test -n "$buffer"
+        commandline -f execute
+        return
+    end
+
+    if git rev-parse --is-inside-work-tree >/dev/null 2>/dev/null
+        commandline --replace -- "git status -u ."
+    else if command -q eza
+        commandline --replace -- "eza -Gax --icons=always --group-directories-first --git"
+    else
+        commandline --replace -- "ls -lh ."
+    end
+
+    commandline -f execute
+end
+
+function __braden_toggle_sudo
+    set -l buffer (commandline)
+
+    if test -z "$buffer"
+        set buffer (history --max=1)
+    end
+
+    if string match -qr '^sudo ' -- $buffer
+        commandline --replace -- (string replace -r '^sudo ' '' -- $buffer)
+    else
+        commandline --replace -- "sudo $buffer"
+    end
+
+    commandline -f repaint
+end
+
+function __braden_fzf_history
+    if not command -q fzf
+        commandline -f up-line
+        return
+    end
+
+    set -l selection (history --max=2000 | fzf \
+        --scheme=history \
+        --tac \
+        --no-sort \
+        --query=(commandline))
+
+    if test -n "$selection"
+        commandline --replace -- $selection
+    end
+
+    commandline -f repaint
+end
+
+function __braden_clear_startup_time --on-event fish_preexec
+    set -e ZSH_STARTUP_MS
+    functions -e __braden_clear_startup_time
+end
