@@ -16,6 +16,21 @@ One repo to carry an entire development environment between machines. Everything
 
 ---
 
+### Quick Start
+
+```bash
+xcode-select --install
+sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply Braden1996
+```
+
+First apply can take a few minutes on a fresh machine because it may install Homebrew, Brew packages, and `mise` runtimes.
+
+### Design Goals
+
+- **Fast shell startup** — cache generated init for `starship`, `fzf`, and `zoxide`, prefer `mise` shims over full shell hooks, and keep shell config modular.
+- **Portable between laptops** — detect Homebrew prefix dynamically, template only the parts that actually vary by machine, and route work Git identity by remote org instead of hardcoded checkout paths.
+- **Keep local state local** — SSH host config, auth state, generated keys, and other machine-bound setup stay outside the tracked repo.
+
 ### New Machine Setup
 
 #### Prerequisites
@@ -59,7 +74,7 @@ You'll be prompted for these values (stored locally, never committed):
 
 - **Homebrew** is installed if missing (with Apple Silicon detection)
 - **Packages** are installed via Brewfile — shell tools, editors, `mise`, `biome`, `jq`, 1Password CLI, Ghostty
-- **Runtimes** are installed via `mise` using the global Node/Python defaults
+- **Runtimes and global tools** are installed via `mise` using the global Node/Python/Biome defaults
 - **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux
 - **TPM** (tmux plugin manager) is cloned if not present
 - **Post-setup checklist** runs and flags anything that still needs manual attention
@@ -97,13 +112,21 @@ Then re-run `chezmoi init` to set the key ID in your config.
 - **Neovim plugins** — open nvim and run `:PlugInstall`
 - **SSH config** — keep `~/.ssh/config` local-only and unmanaged by chezmoi
 
-#### 5. Verify
+#### 5. What stays local
+
+- **SSH host config** — `~/.ssh/config` is intentionally unmanaged so work- and machine-specific hosts do not leak into the repo
+- **Auth state** — `op signin`, SSH agent state, and GPG agent state remain local to the machine
+- **Secrets and keys** — private keys are never stored in the repo; only public identifiers like GPG key IDs are prompted into local chezmoi data
+- **Fonts and app state** — fonts, editor extensions, and login sessions still need a one-time local install/sign-in
+
+#### 6. Verify
 
 ```bash
 ssh -T git@github.com            # SSH works
 echo "test" | gpg --clearsign    # GPG signing works
 zsh-check-deps                   # all tools installed
 fish-check-deps                  # fish prompt/tooling dependencies installed
+chezmoi verify                   # applied files match the target state
 ```
 
 ---
@@ -112,7 +135,7 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 
 <table>
 <tr><td><b>Shell</b></td><td>zsh, fish, antidote, starship prompt, fzf, zoxide, bat, eza, yazi</td></tr>
-<tr><td><b>Editor</b></td><td>cursor (primary), neovim, zed</td></tr>
+<tr><td><b>Editor</b></td><td>Cursor (primary), neovim, zed</td></tr>
 <tr><td><b>Terminal</b></td><td>ghostty, alacritty, iterm2</td></tr>
 <tr><td><b>Git</b></td><td>gpg signing, graphite, conditional work includes, aliases</td></tr>
 <tr><td><b>Tmux</b></td><td>tmux + TPM, dracula theme</td></tr>
@@ -161,6 +184,12 @@ Core: zephyr (prompt, completion). Oh-My-Zsh: git, magic-enter, extract, sudo. D
 </details>
 
 <details>
+<summary><b>Fish without a plugin manager</b></summary>
+<br/>
+Fish uses native <code>conf.d</code> autoloading plus cached init output for <code>starship</code>, <code>fzf</code>, and <code>zoxide</code>. Custom helpers and Nx completions live in-repo instead of depending on a runtime plugin manager.
+</details>
+
+<details>
 <summary><b>1Password integration</b></summary>
 <br/>
 <code>op://</code> URIs in templated configs for secrets, CLI completion hooks in zsh, and GPG signing key storage.
@@ -175,7 +204,7 @@ Template validation via chezmoi, shellcheck linting (SC1090/SC1091 excluded), JS
 <details>
 <summary><b>Dependency checker</b></summary>
 <br/>
-Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and optional ones (eza, bat, yazi, zoxide, antidote) with color-coded output and install hints.
+Run <code>zsh-check-deps</code> or <code>fish-check-deps</code> to verify required tools (starship, fzf, mise) and optional ones (eza, bat, yazi, zoxide) with install hints.
 </details>
 
 ### Structure
@@ -193,11 +222,12 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 ├── dot_tmux.conf                   # tmux config
 ├── dot_bashrc                      # bash fallback
 ├── dot_profile                     # POSIX profile
+├── dot_local/bin/                  # lightweight wrappers (ghostty-fish, corepack shims)
 ├── empty_dot_hushlogin             # suppress login banner
 ├── run_once_before_*.sh.tmpl       # homebrew + package bootstrap
 ├── run_once_after_*.sh.tmpl        # post-apply setup + checklist
 ├── dot_config/
-│   ├── fish/                       # fish config (prompt, bindings, wrappers)
+│   ├── fish/                       # fish conf.d, functions, completions
 │   ├── zsh/                        # modular zsh configs (00-99)
 │   │   ├── 00-path.zsh             #   PATH management
 │   │   ├── 10-options.zsh          #   shell options & history
@@ -208,7 +238,7 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   │   ├── 70-keybindings.zsh      #   Ctrl+y, arrow keys
 │   │   └── 99-local.zsh.tmpl       #   machine-specific
 │   ├── zed/settings.json.tmpl      # zed editor (biome, catppuccin)
-│   ├── ghostty/config              # ghostty (catppuccin, blur)
+│   ├── ghostty/config.tmpl         # ghostty (catppuccin, blur, wrapper command)
 │   ├── alacritty/alacritty.yml     # alacritty (dracula)
 │   ├── iterm2/Default.json         # iterm2 profile
 │   ├── starship.toml               # prompt (catppuccin palette)
@@ -227,9 +257,10 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 chezmoi update          # pull latest changes and apply
 chezmoi diff            # preview what would change
 chezmoi apply           # apply without pulling
-chezmoi edit ~/.zshrc                # edit zsh entrypoint
+chezmoi verify          # confirm target and destination still match
+chezmoi edit ~/.zshrc   # edit zsh entrypoint
 chezmoi edit ~/.config/fish/config.fish   # edit fish entrypoint
-chezmoi add ~/.config/foo/bar   # start managing a new file
+chezmoi add ~/.config/foo/bar    # start managing a new file
 chezmoi cd              # cd into the source directory
 chezmoi init            # re-run prompts (e.g. after generating a GPG key)
 ```
