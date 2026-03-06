@@ -2,23 +2,6 @@
 # Functions
 # =============================================================================
 
-function __braden_find_up --argument-names filename start_dir
-    set -l dir $start_dir
-
-    while true
-        if test -e "$dir/$filename"
-            echo "$dir/$filename"
-            return 0
-        end
-
-        if test "$dir" = /
-            return 1
-        end
-
-        set dir (path dirname "$dir")
-    end
-end
-
 function __braden_print_safe_chain_warning --argument-names original_cmd
     if set -q __BRADEN_SAFE_CHAIN_WARNED
         return
@@ -48,207 +31,28 @@ function __braden_safe_chain_exec --argument-names original_cmd
     end
 end
 
-function __braden_nvm_script
-    for script in \
-        "$HOMEBREW_PREFIX/opt/nvm/nvm.sh" \
-        /opt/homebrew/opt/nvm/nvm.sh \
-        /usr/local/opt/nvm/nvm.sh
-        if test -s "$script"
-            echo "$script"
-            return 0
-        end
-    end
-
-    return 1
-end
-
-function __braden_nvm_sync_env
-    set -l nvm_script (__braden_nvm_script)
-    or return 1
-
-    set -gx NVM_DIR "$HOME/.nvm"
-
-    set -l nvmrc (__braden_find_up .nvmrc $PWD)
-    or begin
-        set -e __BRADEN_NVMRC_PATH
-        return 1
-    end
-
-    if set -q __BRADEN_NVMRC_PATH
-        if test "$__BRADEN_NVMRC_PATH" = "$nvmrc"
-            return 0
-        end
-    end
-
-    set -l output (bash -lc '
-        cd "$1" || exit 1
-        export NVM_DIR="$HOME/.nvm"
-        . "$2"
-        nvm use --silent >/dev/null 2>&1 || exit 1
-        printf "PATH=%s\n" "$PATH"
-        printf "NVM_BIN=%s\n" "${NVM_BIN:-}"
-        printf "NVM_INC=%s\n" "${NVM_INC:-}"
-    ' bash "$PWD" "$nvm_script")
-    or return 1
-
-    for line in $output
-        switch $line
-            case 'PATH=*'
-                set -gx PATH (string split : -- (string sub -s 6 -- $line))
-            case 'NVM_BIN=*'
-                set -gx NVM_BIN (string sub -s 9 -- $line)
-            case 'NVM_INC=*'
-                set -gx NVM_INC (string sub -s 9 -- $line)
-        end
-    end
-
-    set -gx __BRADEN_NVMRC_PATH $nvmrc
-end
-
-function __braden_nvm_exec --argument-names command_name
-    set -l nvm_script (__braden_nvm_script)
-    set -l cmd_args $argv[2..-1]
-    or begin
-        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
-        return 1
-    end
-
-    set -gx NVM_DIR "$HOME/.nvm"
-
-    bash -lc '
-        cd "$1" || exit 1
-        export NVM_DIR="$HOME/.nvm"
-        . "$2"
-        nvmrc_path="$(nvm_find_nvmrc 2>/dev/null)" || nvmrc_path=""
-        if [ -n "$nvmrc_path" ]; then
-            nvm use --silent >/dev/null 2>&1 || exit 1
-        fi
-        shift 2
-        "$@"
-    ' bash "$PWD" "$nvm_script" "$command_name" $cmd_args
-    set -l exit_code $status
-
-    if test $exit_code -eq 0
-        __braden_nvm_sync_env >/dev/null 2>/dev/null
-    end
-
-    return $exit_code
-end
-
-function __braden_nvm_exec_safe_chain --argument-names command_name
-    set -l nvm_script (__braden_nvm_script)
-    set -l cmd_args $argv[2..-1]
-    or begin
-        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
-        return 1
-    end
-
-    set -gx NVM_DIR "$HOME/.nvm"
-
-    bash -lc '
-        cd "$1" || exit 1
-        export NVM_DIR="$HOME/.nvm"
-        . "$2"
-        nvmrc_path="$(nvm_find_nvmrc 2>/dev/null)" || nvmrc_path=""
-        if [ -n "$nvmrc_path" ]; then
-            nvm use --silent >/dev/null 2>&1 || exit 1
-        fi
-        shift 2
-        if command -v safe-chain >/dev/null 2>&1; then
-            safe-chain "$@"
-        else
-            "$@"
-        fi
-    ' bash "$PWD" "$nvm_script" "$command_name" $cmd_args
-    set -l exit_code $status
-
-    if test $exit_code -eq 0
-        __braden_nvm_sync_env >/dev/null 2>/dev/null
-    end
-
-    return $exit_code
-end
-
-function __braden_nvm_auto_use --on-variable PWD
-    status is-interactive; or return
-    __braden_nvm_sync_env >/dev/null 2>/dev/null
-end
-
-function nvm
-    set -l nvm_script (__braden_nvm_script)
-    or begin
-        echo "nvm not found at \$HOMEBREW_PREFIX/opt/nvm/nvm.sh" >&2
-        return 1
-    end
-
-    set -gx NVM_DIR "$HOME/.nvm"
-
-    bash -lc '
-        cd "$1" || exit 1
-        export NVM_DIR="$HOME/.nvm"
-        . "$2"
-        shift 2
-        nvm "$@"
-    ' bash "$PWD" "$nvm_script" $argv
-    set -l exit_code $status
-
-    if test $exit_code -eq 0
-        __braden_nvm_sync_env >/dev/null 2>/dev/null
-    end
-
-    return $exit_code
-end
-
-function node
-    __braden_nvm_exec node $argv
-end
-
 function npm
     if test (count $argv) -eq 1
         switch $argv[1]
             case -v --version
-                __braden_nvm_exec npm $argv
+                command npm $argv
                 return
         end
     end
 
-    __braden_nvm_exec_safe_chain npm $argv
-end
-
-function pyenv
-    functions -e pyenv
-
-    if command -q pyenv
-        set -gx PYENV_ROOT "$HOME/.pyenv"
-        fish_add_path -gPm "$PYENV_ROOT/bin"
-        pyenv init - fish | source
-    end
-
-    pyenv $argv
-end
-
-function rbenv
-    functions -e rbenv
-
-    if test -x "$HOMEBREW_PREFIX/bin/rbenv"
-        "$HOMEBREW_PREFIX/bin/rbenv" init - fish | source
-    else if command -q rbenv
-        rbenv init - fish | source
-    end
-
-    rbenv $argv
+    __braden_safe_chain_exec npm $argv
 end
 
 function npx
-    __braden_nvm_exec_safe_chain npx $argv
+    __braden_safe_chain_exec npx $argv
 end
 
 function yarn
-    __braden_nvm_exec_safe_chain yarn $argv
+    __braden_safe_chain_exec yarn $argv
 end
 
 function pnpm
-    __braden_nvm_exec_safe_chain pnpm $argv
+    __braden_safe_chain_exec pnpm $argv
 end
 
 function pnpx
@@ -321,18 +125,26 @@ end
 
 function nx
     set -l phoenix_root "{{ .chezmoi.homeDir }}/Development/Phoenix"
+    set -l nx_bin "$phoenix_root/node_modules/.bin/nx"
+
+    if not test -x "$nx_bin"
+        echo "nx is not available at $nx_bin" >&2
+        return 1
+    end
 
     if string match -q -- "$phoenix_root*" "$PWD"
-        __braden_nvm_sync_env >/dev/null 2>/dev/null
-        "$phoenix_root/node_modules/.bin/nx" $argv
+        "$nx_bin" $argv
     else
-        echo "nx is only available inside the Phoenix repo ($phoenix_root)" >&2
-        return 1
+        env PATH="$PATH" HOME="$HOME" bash -c '
+            cd "$1" || exit 1
+            shift
+            "$@"
+        ' bash "$phoenix_root" "$nx_bin" $argv
     end
 end
 
 function fish-check-deps
-    set -l required starship fzf
+    set -l required starship fzf mise
     set -l optional eza bat yazi zoxide
     set -l missing_required
     set -l missing_optional

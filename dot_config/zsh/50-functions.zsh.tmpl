@@ -40,12 +40,17 @@ zle -N yazi_cd
 # -----------------------------------------------------------------------------
 nx() {
   local phoenix_root="{{ .chezmoi.homeDir }}/Development/Phoenix"
-  if [[ "$PWD" == "$phoenix_root"* ]]; then
-    _nvm_load && _nvm_use_if_nvmrc
-    "$phoenix_root/node_modules/.bin/nx" "$@"
-  else
-    echo "nx is only available inside the Phoenix repo ($phoenix_root)" >&2
+  local nx_bin="$phoenix_root/node_modules/.bin/nx"
+
+  if [[ ! -x "$nx_bin" ]]; then
+    echo "nx is not available at $nx_bin" >&2
     return 1
+  fi
+
+  if [[ "$PWD" == "$phoenix_root"* ]]; then
+    "$nx_bin" "$@"
+  else
+    (cd "$phoenix_root" && "$nx_bin" "$@")
   fi
 }
 
@@ -53,13 +58,15 @@ nx() {
 # Dependency check (run manually with: zsh-check-deps)
 # -----------------------------------------------------------------------------
 zsh-check-deps() {
-  local -a required=(starship fzf)
+  local -a required=(starship fzf mise)
   local -a optional=(eza bat yazi zoxide)
   local -a missing_required=() missing_optional=()
   local antidote_missing=0
+  local antidote_homebrew="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote/antidote.zsh"
+  local antidote_cache="$ANTIDOTE_HOME/antidote.zsh"
 
-  # Check antidote separately (installed via git, not brew)
-  if [[ ! -d "$ANTIDOTE_HOME" ]]; then
+  # Antidote can come from Homebrew or a git clone cache.
+  if [[ ! -f "$antidote_homebrew" && ! -f "$antidote_cache" ]]; then
     antidote_missing=1
   fi
 

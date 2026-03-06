@@ -3,11 +3,13 @@
 # =============================================================================
 # Machine-specific configuration that shouldn't be committed
 
-# Nx completion
-[[ -s "$HOME/.nx-completion/nx-completion.plugin.zsh" ]] && source "$HOME/.nx-completion/nx-completion.plugin.zsh"
+if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
+  # Nx completion
+  [[ -s "$HOME/.nx-completion/nx-completion.plugin.zsh" ]] && source "$HOME/.nx-completion/nx-completion.plugin.zsh"
 
-# Bun completions
-[[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
+  # Bun completions
+  [[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
+fi
 
 # 1Password-backed secrets
 # To enable 1Password integration, uncomment and adjust the op:// URIs below.
@@ -22,7 +24,10 @@ _clear_startup_time() {
   unset ZSH_STARTUP_MS
   add-zsh-hook -d preexec _clear_startup_time
 }
-add-zsh-hook preexec _clear_startup_time
+if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
+  autoload -Uz add-zsh-hook
+  add-zsh-hook preexec _clear_startup_time
+fi
 
 # =============================================================================
 # Final PATH cleanup (deduplicate after all sources)

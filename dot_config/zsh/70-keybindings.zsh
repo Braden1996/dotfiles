@@ -2,6 +2,10 @@
 # Key Bindings
 # =============================================================================
 
+if (( ${__BRADEN_ZSH_HAS_TTY:-1} == 0 )); then
+  return 0
+fi
+
 # Emacs key bindings (default, but explicit for safety)
 bindkey -e
 

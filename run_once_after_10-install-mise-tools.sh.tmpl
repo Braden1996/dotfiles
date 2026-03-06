@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+if ! command -v mise &>/dev/null; then
+  exit 0
+fi
+
+echo "Installing mise-managed runtimes..."
+mise install
+
+# Keep a Node 20 runtime available for repos pinned to `.nvmrc = v20`.
+mise install node@20.19.4
+
+echo "mise runtime installation complete!"

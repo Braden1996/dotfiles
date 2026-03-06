@@ -25,6 +25,13 @@ _cached_init() {
 }
 
 # -----------------------------------------------------------------------------
+# Starship (cached init instead of zephyr prompt bootstrap)
+# -----------------------------------------------------------------------------
+if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
+  _cached_init starship
+fi
+
+# -----------------------------------------------------------------------------
 # Zoxide (cached init instead of subprocess every shell)
 # -----------------------------------------------------------------------------
 _cached_init zoxide
@@ -48,85 +55,13 @@ export FZF_CTRL_R_OPTS="
 "
 
 # -----------------------------------------------------------------------------
-# NVM (with .nvmrc auto-switching)
+# Mise
 # -----------------------------------------------------------------------------
-export NVM_DIR="$HOME/.nvm"
-_nvm_loaded=0
-
-_nvm_load() {
-  (( _nvm_loaded )) && return 0
-  unset -f nvm node npm npx yarn pnpm 2>/dev/null
-
-  local nvm_script="$HOMEBREW_PREFIX/opt/nvm/nvm.sh"
-  if [[ -s "$nvm_script" ]]; then
-    \. "$nvm_script"
-    [[ -s "$HOMEBREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm" ]] && \
-      \. "$HOMEBREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm"
-    _nvm_loaded=1
-    return 0
-  else
-    print -P "%F{yellow}nvm not found at $nvm_script%f" >&2
-    return 1
-  fi
-}
-
-_nvm_use_if_nvmrc() {
-  local nvmrc_path
-  nvmrc_path="$(nvm_find_nvmrc 2>/dev/null)" || return
-  [[ -z "$nvmrc_path" ]] && return
-
-  local nvmrc_node_version
-  nvmrc_node_version=$(nvm version "$(cat "$nvmrc_path")" 2>/dev/null)
-
-  if [[ "$nvmrc_node_version" == "N/A" ]]; then
-    nvm install
-  elif [[ "$(nvm current)" != "$nvmrc_node_version" ]]; then
-    nvm use
-  fi
-}
-
-# Lazy loaders for node commands
-nvm() { _nvm_load && nvm "$@"; }
-node() { _nvm_load && _nvm_use_if_nvmrc; node "$@"; }
-npm() { _nvm_load && _nvm_use_if_nvmrc; npm "$@"; }
-npx() { _nvm_load && _nvm_use_if_nvmrc; npx "$@"; }
-yarn() { _nvm_load && _nvm_use_if_nvmrc; yarn "$@"; }
-pnpm() { _nvm_load && _nvm_use_if_nvmrc; pnpm "$@"; }
-
-# Auto-switch node version when changing directories
-autoload -U add-zsh-hook
-_nvm_chpwd_hook() {
-  # Load NVM if entering directory with .nvmrc
-  if ! (( _nvm_loaded )) && [[ -f ".nvmrc" ]]; then
-    _nvm_load
-  fi
-  (( _nvm_loaded )) && _nvm_use_if_nvmrc
-}
-add-zsh-hook chpwd _nvm_chpwd_hook
-
-# -----------------------------------------------------------------------------
-# pyenv (lazy loaded)
-# -----------------------------------------------------------------------------
-pyenv() {
-  unset -f pyenv
-  if command -v pyenv >/dev/null; then
-    export PYENV_ROOT="$HOME/.pyenv"
-    export PATH="$PYENV_ROOT/bin:$PATH"
-    eval "$(pyenv init -)"
-  fi
-  pyenv "$@"
-}
-
-# -----------------------------------------------------------------------------
-# rbenv (lazy loaded)
-# -----------------------------------------------------------------------------
-rbenv() {
-  unset -f rbenv
-  if command -v rbenv >/dev/null; then
-    eval "$("$HOMEBREW_PREFIX/bin/rbenv" init - zsh)"
-  fi
-  rbenv "$@"
-}
+if [[ -x "$HOMEBREW_PREFIX/bin/mise" ]]; then
+  eval "$("$HOMEBREW_PREFIX/bin/mise" activate zsh)"
+elif command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
+fi
 
 # -----------------------------------------------------------------------------
 # Android & Java (only export if installed)

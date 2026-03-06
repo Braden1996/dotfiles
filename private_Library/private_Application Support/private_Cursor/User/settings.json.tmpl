@@ -141,7 +141,7 @@
 	"typescript.tsserver.experimental.enableProjectDiagnostics": false,
 	"typescript.tsserver.log": "off",
 	"typescript.tsserver.maxTsServerMemory": 16384,
-	"typescript.tsserver.nodePath": "{{ output "bash" "-c" "export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm which default" | trim }}",
+	"typescript.tsserver.nodePath": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/node",
 	"typescript.updateImportsOnFileMove.enabled": "never",
 
 	// ═══════════════════════════════════════════════════════════════════════════

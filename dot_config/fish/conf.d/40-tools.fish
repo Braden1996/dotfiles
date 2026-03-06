@@ -15,16 +15,50 @@ set -gx FZF_CTRL_R_OPTS (string join " " -- \
     "--preview 'echo {} | sed \"s/^[[:space:]]*[0-9]*[[:space:]]*//\" | bat --color=always --language=zsh --style=plain --theme=\"Catppuccin Macchiato\"'" \
     "--preview-window=right:60%:wrap:border-left")
 
+function __braden_cached_init --argument-names cache_name command_name
+    set -l cmd_args $argv[3..-1]
+    set -l bin_path (type -P $command_name 2>/dev/null)
+    test -n "$bin_path"; or return 1
+
+    set -l cache_dir "$HOME/.cache/fish"
+    set -l cache_file "$cache_dir/$cache_name.fish"
+
+    if not test -d "$cache_dir"
+        mkdir -p "$cache_dir"
+    end
+
+    if not test -s "$cache_file"; or test "$bin_path" -nt "$cache_file"
+        set -l temp_file "$cache_file.$fish_pid.tmp"
+
+        command $command_name $cmd_args >"$temp_file"
+        or begin
+            rm -f "$temp_file"
+            return 1
+        end
+
+        command mv -f "$temp_file" "$cache_file" 2>/dev/null
+        or rm -f "$temp_file"
+    end
+
+    source "$cache_file"
+end
+
 if status is-interactive
+    if command -q mise
+        if not set -q __MISE_DIFF
+            __braden_cached_init mise-activate mise activate fish
+        end
+    end
+
     if command -q zoxide
-        zoxide init fish | source
+        __braden_cached_init zoxide-init zoxide init fish
     end
 
     if command -q fzf
-        fzf --fish | source
+        __braden_cached_init fzf-init fzf --fish
     end
 
     if command -q starship
-        starship init fish | source
+        __braden_cached_init starship-init starship init fish --print-full-init
     end
 end

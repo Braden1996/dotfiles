@@ -1,0 +1,9 @@
+# Global runtime defaults for shells and editors.
+# Additional Node 20 support is installed during bootstrap for repos using `.nvmrc = v20`.
+
+[settings]
+idiomatic_version_file_enable_tools = ["node", "python", "ruby"]
+
+[tools]
+node = "22.16.0"
+python = "3.13.3"

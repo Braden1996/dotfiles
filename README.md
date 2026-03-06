@@ -57,7 +57,8 @@ You'll be prompted for these values (stored locally, never committed):
 #### 3. What happens automatically
 
 - **Homebrew** is installed if missing (with Apple Silicon detection)
-- **Packages** are installed via Brewfile — shell tools, editors, language managers, 1Password CLI, Ghostty
+- **Packages** are installed via Brewfile — shell tools, editors, `mise`, 1Password CLI, Ghostty
+- **Runtimes** are installed via `mise` — global Node/Python defaults plus a Node 20 fallback for older repos
 - **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux, SSH
 - **TPM** (tmux plugin manager) is cloned if not present
 - **Post-setup checklist** runs and flags anything that still needs manual attention
@@ -114,7 +115,7 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 <tr><td><b>Git</b></td><td>gpg signing, graphite, conditional work includes, aliases</td></tr>
 <tr><td><b>Tmux</b></td><td>tmux + TPM, dracula theme</td></tr>
 <tr><td><b>Files</b></td><td>yazi (Ctrl+y picker), ranger</td></tr>
-<tr><td><b>Languages</b></td><td>nvm, pyenv, rbenv (all lazy-loaded), bun</td></tr>
+<tr><td><b>Languages</b></td><td>mise (Node/Python with legacy version-file support), bun</td></tr>
 <tr><td><b>Security</b></td><td>1Password CLI (<code>op://</code> URIs), GPG commit signing</td></tr>
 <tr><td><b>Theme</b></td><td>Catppuccin Macchiato (ghostty, zed, starship, fzf, fsh) / Dracula (alacritty, iterm2, nvim, tmux)</td></tr>
 </table>
@@ -122,9 +123,9 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 ### Highlights
 
 <details>
-<summary><b>Lazy-loaded version managers</b></summary>
+<summary><b>Mise-managed runtimes</b></summary>
 <br/>
-NVM, pyenv, and rbenv are wrapped so they only initialize when first called. NVM also auto-switches Node versions when you <code>cd</code> into a directory with an <code>.nvmrc</code>.
+<code>mise</code> manages Node, Python, and Ruby from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>. The global config pins the default Node/Python versions, and bootstrap installs an extra Node 20 runtime for repos that still declare <code>v20</code>.
 </details>
 
 <details>
@@ -201,7 +202,7 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   │   ├── 10-options.zsh          #   shell options & history
 │   │   ├── 20-plugins.zsh          #   antidote + starship init
 │   │   ├── 30-completion.zsh       #   fzf-tab, bookmarks
-│   │   ├── 40-tools.zsh            #   lazy nvm/pyenv/rbenv
+│   │   ├── 40-tools.zsh            #   mise activation, fzf, zoxide
 │   │   ├── 50-functions.zsh.tmpl   #   yazi, nx wrapper
 │   │   ├── 70-keybindings.zsh      #   Ctrl+y, arrow keys
 │   │   └── 99-local.zsh.tmpl       #   machine-specific

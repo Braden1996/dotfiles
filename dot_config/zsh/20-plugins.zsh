@@ -2,6 +2,12 @@
 # Plugin Management (Antidote)
 # =============================================================================
 
+# Skip prompt/completion/UI plugins for non-TTY interactive shells such as
+# `zsh -ic ...`, which do not have a usable line editor.
+if (( ${__BRADEN_ZSH_HAS_TTY:-1} == 0 )); then
+  return 0
+fi
+
 # Starship prompt configuration (must be before zephyr prompt)
 STARSHIP_PROMPT_NEED_NEWLINE=false
 zstyle ':zephyr:plugin:prompt' theme 'starship'

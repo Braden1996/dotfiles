@@ -1,10 +1,17 @@
 if [[ -d "$HOME/.cargo/bin" ]] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
+if [[ -d "$HOME/.local/share/mise/shims" ]] && [[ ":$PATH:" != *":$HOME/.local/share/mise/shims:"* ]]; then
+  export PATH="$HOME/.local/share/mise/shims:$PATH"
+fi
 ANTIDOTE_HOME="${XDG_CACHE_HOME:-$HOME/Library/Caches}/antidote"
 
 # Record interactive shell startup from the earliest user startup file.
 if [[ -o interactive ]]; then
+  typeset -gi __BRADEN_ZSH_HAS_TTY=0
+  if [[ -t 0 && -t 1 ]]; then
+    __BRADEN_ZSH_HAS_TTY=1
+  fi
   zmodload zsh/datetime 2>/dev/null
   typeset -gF _ZSH_START_REAL=$EPOCHREALTIME
 fi

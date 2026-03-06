@@ -1,0 +1,13 @@
+#!/bin/sh
+
+if [ -z "${__BRADEN_SHELL_START_REAL:-}" ]; then
+  if command -v perl >/dev/null 2>&1; then
+    __BRADEN_SHELL_START_REAL="$(perl -MTime::HiRes=time -e 'printf "%.6f\n", time')"
+  elif command -v python3 >/dev/null 2>&1; then
+    __BRADEN_SHELL_START_REAL="$(python3 -c 'import time; print(f"{time.time():.6f}")')"
+  fi
+
+  export __BRADEN_SHELL_START_REAL
+fi
+
+exec /opt/homebrew/bin/fish "$@"
