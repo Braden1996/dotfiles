@@ -4,6 +4,6 @@
 idiomatic_version_file_enable_tools = ["node", "python", "ruby"]
 
 [tools]
-biome = "2.2.4"
 node = "22.16.0"
 python = "3.13.3"
+rust = "stable"
