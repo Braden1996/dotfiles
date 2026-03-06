@@ -203,7 +203,7 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   │   ├── 20-plugins.zsh          #   antidote + starship init
 │   │   ├── 30-completion.zsh       #   fzf-tab, bookmarks
 │   │   ├── 40-tools.zsh            #   mise activation, fzf, zoxide
-│   │   ├── 50-functions.zsh.tmpl   #   yazi, nx wrapper
+│   │   ├── 50-functions.zsh.tmpl   #   yazi, workspace-aware nx wrapper
 │   │   ├── 70-keybindings.zsh      #   Ctrl+y, arrow keys
 │   │   └── 99-local.zsh.tmpl       #   machine-specific
 │   ├── zed/settings.json.tmpl      # zed editor (biome, catppuccin)

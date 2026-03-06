@@ -36,21 +36,73 @@ zle -N yazi_cd
 # Dependency check (run manually with: zsh-check-deps)
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-# Phoenix repo nx wrapper
+# Nx workspace wrapper
 # -----------------------------------------------------------------------------
-nx() {
-  local phoenix_root="{{ .chezmoi.homeDir }}/Development/Phoenix"
-  local nx_bin="$phoenix_root/node_modules/.bin/nx"
+__braden_nx_is_workspace_root() {
+  [[ -n "$1" ]] || return 1
+  [[ -f "$1/nx.json" || -x "$1/node_modules/.bin/nx" ]]
+}
 
-  if [[ ! -x "$nx_bin" ]]; then
-    echo "nx is not available at $nx_bin" >&2
-    return 1
+__braden_nx_find_workspace_root() {
+  local dir="${1:A}"
+
+  while true; do
+    if __braden_nx_is_workspace_root "$dir"; then
+      print -r -- "$dir"
+      return 0
+    fi
+
+    [[ "$dir" == "/" ]] && return 1
+    dir="${dir:h}"
+  done
+}
+
+__braden_nx_workspace_root() {
+  local workspace_root
+
+  workspace_root="$(__braden_nx_find_workspace_root "$PWD")" && {
+    print -r -- "$workspace_root"
+    return 0
+  }
+
+  if [[ -n "${BRADEN_NX_DEFAULT_WORKSPACE:-}" ]] && __braden_nx_is_workspace_root "$BRADEN_NX_DEFAULT_WORKSPACE"; then
+    print -r -- "${BRADEN_NX_DEFAULT_WORKSPACE:A}"
+    return 0
   fi
 
-  if [[ "$PWD" == "$phoenix_root"* ]]; then
-    "$nx_bin" "$@"
+  return 1
+}
+
+__braden_nx_local_bin() {
+  local workspace_root="$1"
+  local nx_bin="$workspace_root/node_modules/.bin/nx"
+
+  [[ -x "$nx_bin" ]] || return 1
+  print -r -- "$nx_bin"
+}
+
+nx() {
+  local workspace_root nx_bin
+
+  workspace_root="$(__braden_nx_workspace_root)" || {
+    if (( $+commands[nx] )); then
+      command nx "$@"
+      return
+    fi
+
+    echo "No Nx workspace found from $PWD. Set BRADEN_NX_DEFAULT_WORKSPACE to enable nx outside a repo." >&2
+    return 1
+  }
+
+  nx_bin="$(__braden_nx_local_bin "$workspace_root")" || {
+    echo "nx is not available at $workspace_root/node_modules/.bin/nx" >&2
+    return 1
+  }
+
+  if (( $+commands[mise] )); then
+    mise exec -C "$workspace_root" -- "$nx_bin" "$@"
   else
-    (cd "$phoenix_root" && "$nx_bin" "$@")
+    (cd "$workspace_root" && "$nx_bin" "$@")
   fi
 }
 

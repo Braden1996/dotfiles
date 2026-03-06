@@ -6,6 +6,8 @@
 # To enable 1Password integration, uncomment and adjust the op:// URI below.
 # Requires `op` CLI to be installed and configured.
 # set -gx NGROK_AUTHTOKEN (op read 'op://Private/ngrok/credential' --account {{ .onePasswordAccount }})
+# Optional: set a default Nx workspace if you want `nx` to work outside a repo.
+# set -gx BRADEN_NX_DEFAULT_WORKSPACE "$HOME/Development/Phoenix"
 
 if status is-interactive
     if set -q __BRADEN_SHELL_START_REAL

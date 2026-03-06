@@ -123,23 +123,88 @@ function yazi_cd
     commandline -f repaint
 end
 
-function nx
-    set -l phoenix_root "{{ .chezmoi.homeDir }}/Development/Phoenix"
-    set -l nx_bin "$phoenix_root/node_modules/.bin/nx"
+function __braden_nx_is_workspace_root --argument-names dir
+    test -n "$dir"; or return 1
+    test -f "$dir/nx.json"; and return 0
+    test -x "$dir/node_modules/.bin/nx"
+end
 
-    if not test -x "$nx_bin"
-        echo "nx is not available at $nx_bin" >&2
+function __braden_nx_find_workspace_root --argument-names start_dir
+    test -n "$start_dir"; or return 1
+
+    set -l dir (path resolve "$start_dir" 2>/dev/null)
+    or set dir "$start_dir"
+
+    while true
+        if __braden_nx_is_workspace_root "$dir"
+            echo "$dir"
+            return 0
+        end
+
+        if test "$dir" = "/"
+            return 1
+        end
+
+        set dir (path dirname "$dir")
+    end
+end
+
+function __braden_nx_workspace_root
+    set -l workspace_root (__braden_nx_find_workspace_root "$PWD")
+    if test -n "$workspace_root"
+        echo "$workspace_root"
+        return 0
+    end
+
+    if set -q BRADEN_NX_DEFAULT_WORKSPACE
+        set -l default_workspace (path resolve "$BRADEN_NX_DEFAULT_WORKSPACE" 2>/dev/null)
+        or set default_workspace "$BRADEN_NX_DEFAULT_WORKSPACE"
+
+        if __braden_nx_is_workspace_root "$default_workspace"
+            echo "$default_workspace"
+            return 0
+        end
+    end
+
+    return 1
+end
+
+function __braden_nx_local_bin --argument-names workspace_root
+    test -n "$workspace_root"; or return 1
+
+    set -l nx_bin "$workspace_root/node_modules/.bin/nx"
+    test -x "$nx_bin"; or return 1
+
+    echo "$nx_bin"
+end
+
+function nx
+    set -l workspace_root (__braden_nx_workspace_root)
+
+    if test -z "$workspace_root"
+        if command -q nx
+            command nx $argv
+            return $status
+        end
+
+        echo "No Nx workspace found from $PWD. Set BRADEN_NX_DEFAULT_WORKSPACE to enable nx outside a repo." >&2
         return 1
     end
 
-    if string match -q -- "$phoenix_root*" "$PWD"
-        "$nx_bin" $argv
+    set -l nx_bin (__braden_nx_local_bin "$workspace_root")
+    if test -z "$nx_bin"
+        echo "nx is not available at $workspace_root/node_modules/.bin/nx" >&2
+        return 1
+    end
+
+    if command -q mise
+        mise exec -C "$workspace_root" -- "$nx_bin" $argv
     else
         env PATH="$PATH" HOME="$HOME" bash -c '
             cd "$1" || exit 1
             shift
             "$@"
-        ' bash "$phoenix_root" "$nx_bin" $argv
+        ' bash "$workspace_root" "$nx_bin" $argv
     end
 end
 

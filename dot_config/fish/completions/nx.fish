@@ -3,12 +3,17 @@
 # =============================================================================
 
 function __braden_nx_completion_enabled
-    set -l phoenix_root "$HOME/Development/Phoenix"
-    test -x "$phoenix_root/node_modules/.bin/nx"
+    set -l workspace_root (__braden_nx_workspace_root)
+    test -n "$workspace_root"; or return 1
+    __braden_nx_local_bin "$workspace_root" >/dev/null
 end
 
 function __braden_nx_cache_dir
-    echo "$HOME/.cache/fish/nx"
+    set -l workspace_root (__braden_nx_workspace_root)
+    or return 1
+
+    set -l workspace_key (string replace -ar '[^A-Za-z0-9._-]' '_' -- "$workspace_root")
+    echo "$HOME/.cache/fish/nx/$workspace_key"
 end
 
 function __braden_nx_cache_is_fresh --argument-names file_path
@@ -24,6 +29,9 @@ end
 function __braden_nx_refresh_completion_cache
     __braden_nx_completion_enabled; or return 1
 
+    set -l workspace_root (__braden_nx_workspace_root)
+    or return 1
+
     set -l cache_dir (__braden_nx_cache_dir)
     set -l projects_file "$cache_dir/projects.txt"
     set -l targets_file "$cache_dir/targets.txt"
@@ -35,7 +43,6 @@ function __braden_nx_refresh_completion_cache
         return 0
     end
 
-    set -l phoenix_root "$HOME/Development/Phoenix"
     set -l helper_script "$HOME/.config/fish/completions/_braden_nx_workspace.js"
 
     mkdir -p "$cache_dir"
@@ -45,11 +52,15 @@ function __braden_nx_refresh_completion_cache
     set -l temp_targets (mktemp)
     set -l temp_mapping (mktemp)
 
-    env PATH="$PATH" HOME="$HOME" bash -c '
-        cd "$1" || exit 1
-        shift
-        node "$@"
-    ' bash "$phoenix_root" "$helper_script" >"$temp_json" 2>/dev/null
+    if command -q mise
+        env PATH="$PATH" HOME="$HOME" mise exec -C "$workspace_root" -- node "$helper_script" >"$temp_json" 2>/dev/null
+    else
+        env PATH="$PATH" HOME="$HOME" bash -c '
+            cd "$1" || exit 1
+            shift
+            node "$@"
+        ' bash "$workspace_root" "$helper_script" >"$temp_json" 2>/dev/null
+    end
     or begin
         rm -f "$temp_json" "$temp_projects" "$temp_targets" "$temp_mapping"
         return 1

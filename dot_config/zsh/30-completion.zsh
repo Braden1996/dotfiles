@@ -16,7 +16,6 @@ zstyle ':plugin:ez-compinit' 'compstyle' 'ohmy'
 # FZF-tab preview for cd
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -Gax --icons=always --group-directories-first --git'
 
-# Directory bookmarks (usage: cd ~dev, cd ~dl, cd ~cfg)
-hash -d dev=~/Developer
+# Directory bookmarks (usage: cd ~dl, cd ~cfg)
 hash -d dl=~/Downloads
 hash -d cfg=~/.config

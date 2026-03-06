@@ -1,3 +1,4 @@
+{{- $gpgKeyPersonalEmail := get . "gpgKeyPersonalEmail" -}}
 [alias]
     shit = commit --amend --no-edit
     fuck = "!f(){ git shit && git push -f; };f"
@@ -10,8 +11,8 @@
 [user]
 	name = {{ .gitName }}
 	email = {{ .personalEmail }}
-{{- if ne .gpgKeyPersonalEmail "" }}
-  signingkey = {{ .gpgKeyPersonalEmail }}
+{{- if ne $gpgKeyPersonalEmail "" }}
+  signingkey = {{ $gpgKeyPersonalEmail }}
 {{- end }}
 {{ if eq .machineType "work" -}}
 [includeIf "gitdir:~/Development/Phoenix/"]
@@ -23,7 +24,7 @@
 	defaultBranch = master
 [push]
 	default = current
-{{- if ne .gpgKeyPersonalEmail "" }}
+{{- if ne $gpgKeyPersonalEmail "" }}
 [commit]
 	gpgsign = true
 [gpg]

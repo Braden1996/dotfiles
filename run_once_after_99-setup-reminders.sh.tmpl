@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-
+{{ $gpgKeyPersonalEmail := get . "gpgKeyPersonalEmail" }}{{ $gpgKeyWorkEmail := get . "gpgKeyWorkEmail" }}
 echo ""
 echo "============================================"
 echo "  Post-Setup Checklist"
@@ -27,8 +27,8 @@ fi
 if command -v gpg &>/dev/null; then
   if gpg --list-secret-keys --keyid-format=long 2>/dev/null | grep -q sec; then
     echo "[ok] GPG secret key found"
-{{ if ne .gpgKeyPersonalEmail "" -}}
-    echo "[ok] GPG key for {{ .personalEmail }} configured ({{ .gpgKeyPersonalEmail }})"
+{{ if ne $gpgKeyPersonalEmail "" -}}
+    echo "[ok] GPG key for {{ .personalEmail }} configured ({{ $gpgKeyPersonalEmail }})"
 {{ else -}}
     echo "[!!] GPG key for {{ .personalEmail }} not configured in chezmoi"
     echo "     List your keys:  gpg --list-secret-keys --keyid-format=long"
@@ -37,8 +37,8 @@ if command -v gpg &>/dev/null; then
     all_good=false
 {{ end -}}
 {{ if eq .machineType "work" -}}
-{{ if ne .gpgKeyWorkEmail "" -}}
-    echo "[ok] GPG key for {{ .workEmail }} configured ({{ .gpgKeyWorkEmail }})"
+{{ if ne $gpgKeyWorkEmail "" -}}
+    echo "[ok] GPG key for {{ .workEmail }} configured ({{ $gpgKeyWorkEmail }})"
 {{ else -}}
     echo "[!!] GPG key for {{ .workEmail }} not configured in chezmoi"
     echo "     List your keys:  gpg --list-secret-keys --keyid-format=long"
