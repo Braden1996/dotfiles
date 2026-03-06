@@ -58,7 +58,7 @@ You'll be prompted for these values (stored locally, never committed):
 
 - **Homebrew** is installed if missing (with Apple Silicon detection)
 - **Packages** are installed via Brewfile — shell tools, editors, `mise`, 1Password CLI, Ghostty
-- **Runtimes** are installed via `mise` — global Node/Python defaults plus a Node 20 fallback for older repos
+- **Runtimes** are installed via `mise` using the global Node/Python defaults
 - **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux, SSH
 - **TPM** (tmux plugin manager) is cloned if not present
 - **Post-setup checklist** runs and flags anything that still needs manual attention
@@ -125,7 +125,7 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 <details>
 <summary><b>Mise-managed runtimes</b></summary>
 <br/>
-<code>mise</code> manages Node, Python, and Ruby from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>. The global config pins the default Node/Python versions, and bootstrap installs an extra Node 20 runtime for repos that still declare <code>v20</code>.
+<code>mise</code> manages Node, Python, and Ruby from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>. The global config pins the default Node/Python versions.
 </details>
 
 <details>
