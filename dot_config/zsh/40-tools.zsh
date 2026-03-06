@@ -57,10 +57,14 @@ export FZF_CTRL_R_OPTS="
 # -----------------------------------------------------------------------------
 # Mise
 # -----------------------------------------------------------------------------
-if [[ -x "$HOMEBREW_PREFIX/bin/mise" ]]; then
-  eval "$("$HOMEBREW_PREFIX/bin/mise" activate zsh)"
-elif command -v mise >/dev/null 2>&1; then
-  eval "$(mise activate zsh)"
+# Fast path: shims in PATH handle runtime selection without a shell hook.
+# Opt back into full activation hooks by exporting BRADEN_ENABLE_MISE_HOOKS=1.
+if [[ "${BRADEN_ENABLE_MISE_HOOKS:-0}" == "1" ]]; then
+  if [[ -x "$HOMEBREW_PREFIX/bin/mise" ]]; then
+    eval "$("$HOMEBREW_PREFIX/bin/mise" activate zsh)"
+  elif command -v mise >/dev/null 2>&1; then
+    eval "$(mise activate zsh)"
+  fi
 fi
 
 # -----------------------------------------------------------------------------

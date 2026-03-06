@@ -67,7 +67,7 @@
     "Red Component" : 0.90032327175140381,
     "Blue Component" : 0.90032327175140381
   },
-  "Working Directory" : "\/Users\/braden",
+  "Working Directory" : "",
   "Blinking Cursor" : false,
   "Disable Window Resizing" : true,
   "Sync Title" : false,
@@ -91,7 +91,7 @@
   },
   "Custom Command" : "No",
   "ASCII Anti Aliased" : true,
-  "Non Ascii Font" : "Monaco 12",
+  "Non Ascii Font" : "FiraCodeNerdFontMono-Regular 13",
   "Vertical Spacing" : 1.1000000000000001,
   "Use Bold Font" : true,
   "Option Key Sends" : 0,
@@ -340,7 +340,7 @@
     "Red Component" : 0,
     "Blue Component" : 0
   },
-  "Normal Font" : "JetBrainsMonoMediumNerdFontCompleteM-Medium 13",
+  "Normal Font" : "FiraCodeNerdFontMono-Regular 13",
   "Ansi 1 Color" : {
     "Green Component" : 0.3333333432674408,
     "Red Component" : 1,

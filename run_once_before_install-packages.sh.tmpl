@@ -1,19 +1,34 @@
 #!/bin/bash
 set -euo pipefail
 
+BREW_BIN=""
+
 # Install Homebrew if missing
-if ! command -v brew &>/dev/null; then
+if command -v brew &>/dev/null; then
+  BREW_BIN="$(command -v brew)"
+elif [[ -x /opt/homebrew/bin/brew ]]; then
+  BREW_BIN=/opt/homebrew/bin/brew
+elif [[ -x /usr/local/bin/brew ]]; then
+  BREW_BIN=/usr/local/bin/brew
+else
   echo "Installing Homebrew..."
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-{{ if eq .chezmoi.arch "arm64" }}
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-{{ else }}
-  eval "$(/usr/local/bin/brew shellenv)"
-{{ end }}
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    BREW_BIN=/opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    BREW_BIN=/usr/local/bin/brew
+  fi
 fi
 
+if [[ -z "$BREW_BIN" ]]; then
+  echo "Homebrew was not found after installation" >&2
+  exit 1
+fi
+
+eval "$("$BREW_BIN" shellenv)"
+
 # Install packages via Brewfile
-brew bundle --file=/dev/stdin <<BREWFILE
+"$BREW_BIN" bundle --file=/dev/stdin <<BREWFILE
 # Shell & Prompt
 brew "antidote"
 brew "fish"
@@ -27,8 +42,10 @@ brew "eza"
 brew "bat"
 brew "yazi"
 brew "ranger"
+brew "jq"
 
 # Editors & Terminal
+brew "biome"
 brew "neovim"
 brew "tmux"
 

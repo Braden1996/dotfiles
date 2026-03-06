@@ -10,4 +10,15 @@ if [ -z "${__BRADEN_SHELL_START_REAL:-}" ]; then
   export __BRADEN_SHELL_START_REAL
 fi
 
-exec /opt/homebrew/bin/fish "$@"
+if fish_path="$(command -v fish 2>/dev/null)"; then
+  exec "$fish_path" "$@"
+fi
+
+for candidate in /opt/homebrew/bin/fish /usr/local/bin/fish /opt/local/bin/fish; do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+echo "fish is not installed or not on PATH" >&2
+exit 127

@@ -4,7 +4,13 @@
 # Consolidated PATH modifications - order matters (last added = highest priority)
 
 # Homebrew (should already be in PATH from /etc/zprofile, but ensure it)
-[[ -d /opt/homebrew/bin ]] && path=(/opt/homebrew/bin $path)
+if [[ -n "${HOMEBREW_PREFIX:-}" && -d "$HOMEBREW_PREFIX/bin" ]]; then
+  path=("$HOMEBREW_PREFIX/bin" $path)
+elif [[ -d /opt/homebrew/bin ]]; then
+  path=(/opt/homebrew/bin $path)
+elif [[ -d /usr/local/bin ]]; then
+  path=(/usr/local/bin $path)
+fi
 
 # Android SDK
 [[ -d "$HOME/Library/Android/sdk/platform-tools" ]] && path+=("$HOME/Library/Android/sdk/platform-tools")

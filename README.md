@@ -12,7 +12,7 @@
 
 ---
 
-One repo to carry an entire development environment between machines. Everything that can be automated is automated — packages are installed, configs are templated per machine type, and a post-apply checklist catches anything that needs manual attention (SSH keys, GPG keys, fonts). Machine-specific secrets like signing keys are prompted at init time, never hardcoded.
+One repo to carry an entire development environment between machines. Everything that can be automated is automated — packages are installed, configs are templated per machine type, and a post-apply checklist catches anything that needs manual attention (SSH keys, GPG keys, fonts). Machine-specific secrets like signing keys are prompted at init time, never hardcoded, and SSH host config stays local-only.
 
 ---
 
@@ -48,6 +48,7 @@ You'll be prompted for these values (stored locally, never committed):
 | `gitName` | Git author name | `Braden Marshall` |
 | `personalEmail` | Personal email for git | `me@bradenm.co.uk` |
 | `workEmail` | Work email (work machines only) | `braden@attio.com` |
+| `workGitHubOrg` | GitHub org for work repos (optional, work machines only) | `Attio` |
 | `onePasswordAccount` | 1Password account domain | `my.1password.com` |
 | `gpgKeyPersonalEmail` | GPG signing key ID for your personal email | `38D2DE75C7CD663D` |
 | `gpgKeyWorkEmail` | GPG signing key ID for your work email (work only) | `9BD932BC6F57FB4E` |
@@ -57,9 +58,9 @@ You'll be prompted for these values (stored locally, never committed):
 #### 3. What happens automatically
 
 - **Homebrew** is installed if missing (with Apple Silicon detection)
-- **Packages** are installed via Brewfile — shell tools, editors, `mise`, 1Password CLI, Ghostty
+- **Packages** are installed via Brewfile — shell tools, editors, `mise`, `biome`, `jq`, 1Password CLI, Ghostty
 - **Runtimes** are installed via `mise` using the global Node/Python defaults
-- **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux, SSH
+- **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux
 - **TPM** (tmux plugin manager) is cloned if not present
 - **Post-setup checklist** runs and flags anything that still needs manual attention
 
@@ -94,6 +95,7 @@ Then re-run `chezmoi init` to set the key ID in your config.
 - **Nerd Font** — install [FiraCode Nerd Font](https://www.nerdfonts.com/) (used by editors, starship, terminal)
 - **Tmux plugins** — open tmux and press `prefix + I`
 - **Neovim plugins** — open nvim and run `:PlugInstall`
+- **SSH config** — keep `~/.ssh/config` local-only and unmanaged by chezmoi
 
 #### 5. Verify
 
@@ -115,7 +117,7 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 <tr><td><b>Git</b></td><td>gpg signing, graphite, conditional work includes, aliases</td></tr>
 <tr><td><b>Tmux</b></td><td>tmux + TPM, dracula theme</td></tr>
 <tr><td><b>Files</b></td><td>yazi (Ctrl+y picker), ranger</td></tr>
-<tr><td><b>Languages</b></td><td>mise (Node/Python with legacy version-file support), bun</td></tr>
+<tr><td><b>Languages</b></td><td>mise (Node/Python/Biome with legacy version-file support), optional bun shims if installed separately</td></tr>
 <tr><td><b>Security</b></td><td>1Password CLI (<code>op://</code> URIs), GPG commit signing</td></tr>
 <tr><td><b>Theme</b></td><td>Catppuccin Macchiato (ghostty, zed, starship, fzf, fsh) / Dracula (alacritty, iterm2, nvim, tmux)</td></tr>
 </table>
@@ -125,13 +127,13 @@ fish-check-deps                  # fish prompt/tooling dependencies installed
 <details>
 <summary><b>Mise-managed runtimes</b></summary>
 <br/>
-<code>mise</code> manages Node, Python, and Ruby from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>. The global config pins the default Node/Python versions.
+<code>mise</code> manages global Node, Python, and Biome versions from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>.
 </details>
 
 <details>
 <summary><b>Work / personal machine branching</b></summary>
 <br/>
-Set <code>machineType</code> at init to toggle work-specific git configs (separate signing key, email, conditional includes for work repos). Architecture-aware paths handle Apple Silicon vs Intel Homebrew locations.
+Set <code>machineType</code> at init to toggle work-specific git configs (separate signing key, email, conditional includes for the configured work GitHub org). Architecture-aware paths handle Apple Silicon vs Intel Homebrew locations.
 </details>
 
 <details>
@@ -189,7 +191,6 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 ├── dot_zprofile                    # login shell setup
 ├── dot_zsh_plugins.txt             # antidote plugin list
 ├── dot_tmux.conf                   # tmux config
-├── dot_fzf.settings                # fzf defaults
 ├── dot_bashrc                      # bash fallback
 ├── dot_profile                     # POSIX profile
 ├── empty_dot_hushlogin             # suppress login banner
@@ -202,7 +203,7 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   │   ├── 10-options.zsh          #   shell options & history
 │   │   ├── 20-plugins.zsh          #   antidote + starship init
 │   │   ├── 30-completion.zsh       #   fzf-tab, bookmarks
-│   │   ├── 40-tools.zsh            #   mise activation, fzf, zoxide
+│   │   ├── 40-tools.zsh            #   mise shims, fzf, zoxide
 │   │   ├── 50-functions.zsh.tmpl   #   yazi, workspace-aware nx wrapper
 │   │   ├── 70-keybindings.zsh      #   Ctrl+y, arrow keys
 │   │   └── 99-local.zsh.tmpl       #   machine-specific
@@ -218,7 +219,6 @@ Run <code>zsh-check-deps</code> to verify required tools (starship, fzf) and opt
 │   └── private_git/                # private git ignores
 ├── private_Library/
 │   └── .../Cursor/User/            # cursor settings & keybindings
-└── private_dot_ssh/config          # SSH (ed25519, keychain)
 ```
 
 ### Common Commands

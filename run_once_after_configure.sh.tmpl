@@ -11,7 +11,7 @@ fi
 # Install TPM (tmux plugin manager) if not present
 if [[ ! -d "{{ .chezmoi.homeDir }}/.tmux/plugins/tpm" ]]; then
   echo "Installing TPM (tmux plugin manager)..."
-  git clone https://github.com/tmux-plugins/tpm "{{ .chezmoi.homeDir }}/.tmux/plugins/tpm"
+  git clone --depth 1 https://github.com/tmux-plugins/tpm "{{ .chezmoi.homeDir }}/.tmux/plugins/tpm"
 fi
 
 echo "Post-apply configuration complete!"

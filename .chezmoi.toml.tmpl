@@ -2,8 +2,10 @@
 {{- $gitName := promptStringOnce . "gitName" "Git author name" -}}
 {{- $personalEmail := promptStringOnce . "personalEmail" "Personal email address" -}}
 {{- $workEmail := "" -}}
+{{- $workGitHubOrg := "" -}}
 {{- if eq $machineType "work" -}}
 {{-   $workEmail = promptStringOnce . "workEmail" "Work email address" -}}
+{{-   $workGitHubOrg = promptStringOnce . "workGitHubOrg" "GitHub organization for work repos (blank to skip remote-based git identity switching)" -}}
 {{- end -}}
 {{- $onePasswordAccount := promptStringOnce . "onePasswordAccount" "1Password account (e.g. my.1password.com)" -}}
 {{- $gpgKeyPersonalEmail := promptStringOnce . "gpgKeyPersonalEmail" (printf "GPG signing key ID for %s (blank if not yet generated)" $personalEmail) -}}
@@ -17,6 +19,7 @@
   gitName = {{ $gitName | quote }}
   personalEmail = {{ $personalEmail | quote }}
   workEmail = {{ $workEmail | quote }}
+  workGitHubOrg = {{ $workGitHubOrg | quote }}
   onePasswordAccount = {{ $onePasswordAccount | quote }}
   gpgKeyPersonalEmail = {{ $gpgKeyPersonalEmail | quote }}
   gpgKeyWorkEmail = {{ $gpgKeyWorkEmail | quote }}

@@ -1,4 +1,5 @@
 {{- $gpgKeyPersonalEmail := get . "gpgKeyPersonalEmail" -}}
+{{- $workGitHubOrg := get . "workGitHubOrg" -}}
 [alias]
     shit = commit --amend --no-edit
     fuck = "!f(){ git shit && git push -f; };f"
@@ -15,10 +16,14 @@
   signingkey = {{ $gpgKeyPersonalEmail }}
 {{- end }}
 {{ if eq .machineType "work" -}}
-[includeIf "gitdir:~/Development/Phoenix/"]
+{{- if ne $workGitHubOrg "" }}
+[includeIf "hasconfig:remote.*.url:git@github.com:{{ $workGitHubOrg }}/**"]
     path = ~/.attio.gitconfig
-[includeIf "gitdir:~/Development/react-native-bottom-sheet-toolbox/"]
+[includeIf "hasconfig:remote.*.url:ssh://git@github.com/{{ $workGitHubOrg }}/**"]
     path = ~/.attio.gitconfig
+[includeIf "hasconfig:remote.*.url:https://github.com/{{ $workGitHubOrg }}/**"]
+    path = ~/.attio.gitconfig
+{{- end }}
 {{ end -}}
 [init]
 	defaultBranch = master
@@ -28,11 +33,7 @@
 [commit]
 	gpgsign = true
 [gpg]
-{{- if eq .chezmoi.arch "arm64" }}
-	program = /opt/homebrew/bin/gpg
-{{- else }}
-	program = /usr/local/bin/gpg
-{{- end }}
+	program = gpg
 [tag]
 	forceSignAnnotated = true
 {{- end }}

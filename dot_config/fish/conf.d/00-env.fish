@@ -27,14 +27,8 @@ if set -q MANPATH[1]
     set -gx MANPATH "" $MANPATH
 end
 
-# Prefer a terminal-provided startup timestamp. Fall back to Fish init timing.
-if status is-interactive; and not set -q __BRADEN_SHELL_START_REAL
-    if command -q perl
-        set -gx __BRADEN_SHELL_START_REAL (command perl -MTime::HiRes=time -e 'printf "%.6f\n", time')
-    else if command -q python3
-        set -gx __BRADEN_SHELL_START_REAL (command python3 -c 'import time; print(f"{time.time():.6f}")')
-    end
-end
+# Prefer a terminal-provided startup timestamp so Fish startup avoids extra
+# subprocesses just to measure prompt latency.
 
 if test -d /Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
     set -gx JAVA_HOME /Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home

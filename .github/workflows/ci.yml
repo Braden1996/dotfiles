@@ -25,6 +25,7 @@ jobs:
             gitName = "Test"
             personalEmail = "test@example.com"
             workEmail = ""
+            workGitHubOrg = ""
             onePasswordAccount = "test.1password.com"
           EOF
 
@@ -95,9 +96,13 @@ jobs:
             gitName = "Test"
             personalEmail = "test@example.com"
             workEmail = ""
+            workGitHubOrg = ""
             onePasswordAccount = "test.1password.com"
           EOF
 
-      - name: Validate settings.json.tmpl
+      - name: Validate editor JSON templates
         run: |
           "$HOME/bin/chezmoi" execute-template < dot_config/zed/settings.json.tmpl | jq . > /dev/null
+          "$HOME/bin/chezmoi" execute-template < "private_Library/private_Application Support/private_Cursor/User/settings.json.tmpl" \
+            | sed '/^[[:space:]]*\/\//d' \
+            | jq . > /dev/null
