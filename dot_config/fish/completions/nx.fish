@@ -52,14 +52,16 @@ function __braden_nx_refresh_completion_cache
     set -l temp_targets (mktemp)
     set -l temp_mapping (mktemp)
 
-    if command -q mise
-        env PATH="$PATH" HOME="$HOME" mise exec -C "$workspace_root" -- node "$helper_script" >"$temp_json" 2>/dev/null
+    if command -q node
+        env PATH="$PATH" HOME="$HOME" command node "$helper_script" "$workspace_root" >"$temp_json" 2>/dev/null
+    else if command -q mise
+        env PATH="$PATH" HOME="$HOME" mise exec -C "$workspace_root" -- node "$helper_script" "$workspace_root" >"$temp_json" 2>/dev/null
     else
         env PATH="$PATH" HOME="$HOME" bash -c '
             cd "$1" || exit 1
             shift
             node "$@"
-        ' bash "$workspace_root" "$helper_script" >"$temp_json" 2>/dev/null
+        ' bash "$workspace_root" "$helper_script" "$workspace_root" >"$temp_json" 2>/dev/null
     end
     or begin
         rm -f "$temp_json" "$temp_projects" "$temp_targets" "$temp_mapping"
@@ -170,12 +172,12 @@ function __braden_nx_targets_with_desc
     __braden_nx_targets | awk '{ printf "%s\tWorkspace target\n", $0 }'
 end
 
-function __braden_nx_run_specs
-    __braden_nx_project_target_pairs | awk -F '\t' '{ printf "%s:%s\t%s target for %s\n", $1, $2, $2, $1 }'
-end
-
 function __braden_nx_projects_for_target --argument-names target_name
     __braden_nx_project_target_pairs | awk -F '\t' -v target_name="$target_name" '$2 == target_name { print $1 }'
+end
+
+function __braden_nx_projects_with_colon
+    __braden_nx_projects | awk '{ printf "%s:\tRun a target for %s\n", $0, $0 }'
 end
 
 function __braden_nx_non_option_args
@@ -211,6 +213,18 @@ function __braden_nx_projects_for_first_target
     __braden_nx_projects_for_target $first_arg
 end
 
+function __braden_nx_current_token_has_colon
+    string match -q '*:*' -- (commandline -ct)
+end
+
+function __braden_nx_run_targets_for_current_project
+    set -l current_token (commandline -ct)
+    string match -q '*:*' -- $current_token; or return 1
+
+    set -l project_name (string replace -r ':.*$' '' -- $current_token)
+    __braden_nx_project_target_pairs | awk -F '\t' -v project_name="$project_name" '$1 == project_name { printf "%s:%s\t%s target for %s\n", $1, $2, $2, $1 }'
+end
+
 function __braden_nx_previous_token_is
     set -l tokens (commandline -opc)
     test (count $tokens) -gt 0; or return 1
@@ -240,7 +254,8 @@ complete -c nx -e
 complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_use_subcommand' -a '(__braden_nx_subcommands_with_desc)'
 complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_use_subcommand' -a '(__braden_nx_targets_with_desc)'
 
-complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_seen_subcommand_from run; and __fish_is_nth_token 2' -a '(__braden_nx_run_specs)'
+complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_seen_subcommand_from run; and __fish_is_nth_token 2; and not __braden_nx_current_token_has_colon' -a '(__braden_nx_projects_with_colon)'
+complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_seen_subcommand_from run; and __fish_is_nth_token 2; and __braden_nx_current_token_has_colon' -a '(__braden_nx_run_targets_for_current_project)'
 complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_is_nth_token 2; and __braden_nx_is_target_command' -a '(__braden_nx_projects_for_first_target)'
 
 complete -f -c nx -n '__braden_nx_completion_enabled; and __fish_seen_subcommand_from run-many affected' -s t -xa '(__braden_nx_csv_candidates targets)' -d 'Targets to run'

@@ -20,14 +20,44 @@ function __braden_print_safe_chain_warning --argument-names original_cmd
     printf ".\n"
 end
 
+function __braden_resolve_wrapped_command --argument-names original_cmd
+    if command -q $original_cmd
+        echo $original_cmd
+        return 0
+    end
+
+    switch $original_cmd
+        case yarn pnpm
+            if command -q corepack
+                printf "%s\n" corepack $original_cmd
+                return 0
+            end
+        case pnpx
+            if command -q corepack
+                printf "%s\n" corepack pnpm dlx
+                return 0
+            end
+    end
+
+    return 1
+end
+
 function __braden_safe_chain_exec --argument-names original_cmd
     set -l cmd_args $argv[2..-1]
+    set -l resolved_cmd (__braden_resolve_wrapped_command $original_cmd)
 
-    if command -q safe-chain
+    if command -q safe-chain; and test (count $resolved_cmd) -gt 0; and test "$resolved_cmd[1]" = "$original_cmd"
         safe-chain $original_cmd $cmd_args
     else
-        __braden_print_safe_chain_warning $original_cmd
-        command $original_cmd $cmd_args
+        if not command -q safe-chain
+            __braden_print_safe_chain_warning $original_cmd
+        end
+
+        if test (count $resolved_cmd) -gt 0
+            command $resolved_cmd $cmd_args
+        else
+            command $original_cmd $cmd_args
+        end
     end
 end
 
@@ -284,8 +314,9 @@ function __braden_fzf_history
 
     set -l selection (history --max=2000 | fzf \
         --scheme=history \
-        --tac \
         --no-sort \
+        --preview 'echo {} | bat --color=always --language=fish --style=plain --theme="Catppuccin Macchiato"' \
+        --preview-window=right:60%:wrap:border-left \
         --query=(commandline))
 
     if test -n "$selection"

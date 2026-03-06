@@ -14,6 +14,7 @@ set -gx HOMEBREW_REPOSITORY $HOMEBREW_PREFIX
 
 # Keep PATH ordering aligned with the existing zsh setup.
 fish_add_path -gPm "$HOMEBREW_PREFIX/bin" "$HOMEBREW_PREFIX/sbin"
+fish_add_path -gPm "$HOME/.local/bin"
 fish_add_path -gPm "$HOME/.local/share/mise/shims"
 fish_add_path -gPm "$HOME/.cargo/bin"
 fish_add_path -gPm "$HOME/.bun/bin"

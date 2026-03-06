@@ -14,7 +14,7 @@ continuation_prompt = "[▸▹ ](overlay1)"
 
 # Left side: context + character (where you type)
 # Dimmed diamond separator between directory and git
-format = """$username$hostname$container$directory$git_branch$git_status$git_state $character"""
+format = """$username$hostname$container$directory$git_branch$git_state $character"""
 
 # Right side: metadata only (startup/duration/time)
 right_format = """${env_var.ZSH_STARTUP_MS}$cmd_duration$time"""
@@ -61,7 +61,7 @@ symbol = "󰘬"
 style = "mauve"
 
 [git_status]
-disabled = false
+disabled = true
 format = '([$all_status$ahead_behind]($style))'
 style = "flamingo"
 conflicted = "󰞇 "

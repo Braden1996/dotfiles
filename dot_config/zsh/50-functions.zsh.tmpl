@@ -33,6 +33,66 @@ yazi_cd() {
 zle -N yazi_cd
 
 # -----------------------------------------------------------------------------
+# Corepack-backed package manager wrappers
+# -----------------------------------------------------------------------------
+__braden_zsh_print_safe_chain_warning() {
+  [[ -n "${__BRADEN_SAFE_CHAIN_WARNED:-}" ]] && return
+
+  typeset -g __BRADEN_SAFE_CHAIN_WARNED=1
+  print -P "%K{yellow}%F{black}Warning:%f%k safe-chain is not available to protect you from installing malware. $1 will run without it."
+  print -P "Install safe-chain by using %F{cyan}npm install -g @aikidosec/safe-chain%f."
+}
+
+__braden_zsh_resolve_wrapped_command() {
+  local original_cmd="$1"
+
+  if (( $+commands[$original_cmd] )); then
+    print -r -- "${commands[$original_cmd]}"
+    return 0
+  fi
+
+  case "$original_cmd" in
+    yarn|pnpm)
+      (( $+commands[corepack] )) || return 1
+      print -r -- "corepack"
+      print -r -- "$original_cmd"
+      ;;
+    pnpx)
+      (( $+commands[corepack] )) || return 1
+      print -r -- "corepack"
+      print -r -- "pnpm"
+      print -r -- "dlx"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+__braden_zsh_run_wrapped_command() {
+  local original_cmd="$1"
+  shift
+
+  local -a resolved_cmd
+  resolved_cmd=("${(@f)$(__braden_zsh_resolve_wrapped_command "$original_cmd")}")
+
+  if (( $+commands[safe-chain] && $+commands[$original_cmd] )); then
+    safe-chain "$original_cmd" "$@"
+    return
+  fi
+
+  if (( !$+commands[safe-chain] )); then
+    __braden_zsh_print_safe_chain_warning "$original_cmd"
+  fi
+
+  if (( ${#resolved_cmd[@]} )); then
+    "${resolved_cmd[@]}" "$@"
+  else
+    command "$original_cmd" "$@"
+  fi
+}
+
+# -----------------------------------------------------------------------------
 # Dependency check (run manually with: zsh-check-deps)
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------

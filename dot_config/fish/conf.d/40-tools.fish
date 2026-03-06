@@ -44,12 +44,6 @@ function __braden_cached_init --argument-names cache_name command_name
 end
 
 if status is-interactive
-    if command -q mise
-        if not set -q __MISE_DIFF
-            __braden_cached_init mise-activate mise activate fish
-        end
-    end
-
     if command -q zoxide
         __braden_cached_init zoxide-init zoxide init fish
     end

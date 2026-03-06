@@ -21,6 +21,11 @@ fi
 # Safe-chain initialization
 [[ -f ~/.safe-chain/scripts/init-posix.sh ]] && source ~/.safe-chain/scripts/init-posix.sh
 
+# Keep package-manager wrappers working when tools are exposed via corepack.
+yarn() { __braden_zsh_run_wrapped_command yarn "$@"; }
+pnpm() { __braden_zsh_run_wrapped_command pnpm "$@"; }
+pnpx() { __braden_zsh_run_wrapped_command pnpx "$@"; }
+
 # Clear startup time after first command so it only shows on the initial prompt.
 _clear_startup_time() {
   unset ZSH_STARTUP_MS
