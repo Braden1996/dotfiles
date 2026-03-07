@@ -14,7 +14,7 @@ continuation_prompt = "[▸▹ ](overlay1)"
 
 # Left side: context + character (where you type)
 # Dimmed diamond separator between directory and git
-format = """$username$hostname$container$directory$git_branch$git_state $character"""
+format = """$username$hostname$container$directory$git_branch${env_var.BRADEN_GIT_DIRTY}$git_state $character"""
 
 # Right side: metadata only (startup/duration/time)
 right_format = """${env_var.ZSH_STARTUP_MS}$cmd_duration$time"""
@@ -56,14 +56,16 @@ before_repo_root_style = "dimmed sapphire"
 # Git Modules
 # =============================================================================
 [git_branch]
-format = "[⋄](overlay0)[$symbol$branch]($style)"
+format = " [$symbol$branch]($style)"
 symbol = "󰘬"
 style = "mauve"
 
 [git_status]
 disabled = true
-format = '([$all_status$ahead_behind]($style))'
-style = "flamingo"
+ignore_submodules = true
+use_git_executable = false
+format = '[ $all_status$ahead_behind]($style)'
+style = "overlay1"
 conflicted = "󰞇 "
 ahead = "󰜷${count}"
 behind = "󰜮${count}"
@@ -82,7 +84,7 @@ tag_symbol = " 󰓹 "
 style = "mauve"
 
 [git_state]
-format = '[\($state( $progress_current of $progress_total)\)]($style) '
+format = ' [\($state( $progress_current of $progress_total)\)]($style)'
 cherry_pick = "[󰇚 PICKING](bold red)"
 rebase = "[󰳖 REBASING](bold mauve)"
 merge = "[󰘭 MERGING](bold blue)"
@@ -328,6 +330,11 @@ Windows = "󰍲 "
 variable = "ZSH_STARTUP_MS"
 format = "[󱎫 ${env_value}ms]($style) "
 style = "overlay1"
+
+[env_var.BRADEN_GIT_DIRTY]
+variable = "BRADEN_GIT_DIRTY"
+format = "[$env_value]($style)"
+style = "peach"
 
 # =============================================================================
 # Color Palette (must be at the end of the file)
