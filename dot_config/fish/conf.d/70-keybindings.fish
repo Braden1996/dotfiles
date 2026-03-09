@@ -2,6 +2,14 @@
 # Key Bindings
 # =============================================================================
 
+function __braden_tab_or_yazi
+    if test -z (string trim -- (commandline))
+        yazi_choose
+    else
+        commandline -f complete
+    end
+end
+
 function __braden_up_or_history
     if commandline -P
         commandline -f up-line
@@ -72,6 +80,7 @@ end
 if status is-interactive
     bind \r __braden_magic_enter
     bind \e\e __braden_toggle_sudo
+    bind \t __braden_tab_or_yazi
     bind \cy yazi_choose
     bind super-c fish_clipboard_copy
     bind left '__braden_move_or_collapse_selection start backward-char'
