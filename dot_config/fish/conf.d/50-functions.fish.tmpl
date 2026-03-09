@@ -126,15 +126,21 @@ function poetry
 end
 
 function yazi_choose
-    set -l tmpfile (mktemp)
-    yazi --chooser-file="$tmpfile" >/dev/tty
+    set -l chooser (mktemp)
+    set -l cwdfile (mktemp)
+    yazi --chooser-file="$chooser" --cwd-file="$cwdfile" >/dev/tty
 
-    if test -s "$tmpfile"
-        set -l selection (cat "$tmpfile")
+    if test -s "$chooser"
+        set -l selection (cat "$chooser")
         commandline --insert -- (string escape -- $selection)
+    else if test -s "$cwdfile"
+        set -l dir (cat "$cwdfile")
+        if test -d "$dir"; and test "$dir" != "$PWD"
+            cd "$dir"
+        end
     end
 
-    rm -f "$tmpfile"
+    rm -f "$chooser" "$cwdfile"
     commandline -f repaint
 end
 
