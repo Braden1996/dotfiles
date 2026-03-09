@@ -324,6 +324,8 @@ return {
       expr = true,
       silent = true,
     }
+    opts.filesystem = opts.filesystem or {}
+    opts.filesystem.use_libuv_file_watcher = false
 
     return opts
   end,
