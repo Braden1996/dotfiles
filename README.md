@@ -131,6 +131,8 @@ usage-data preference remains a manual consent setting.
   persists supported GitHub CLI, SST, and Yarn Berry choices.
 - Grok also has telemetry, trace uploads, Mixpanel, and codebase uploads disabled
   in `~/.grok/config.toml`.
+- Claude Code disables nonessential traffic (telemetry, feedback, error reports,
+  self-updates, and surveys) through the shared privacy environment.
 - Gitleaks scans Git history and the working tree, including a dedicated rule
   that catches a hardcoded Flow Icons license.
 - GitHub Actions, Neovim plugins, validation tools, mise artifacts, and tmux
