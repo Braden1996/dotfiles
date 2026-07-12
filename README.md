@@ -126,7 +126,7 @@ usage-data preference remains a manual consent setting.
   updates remain on.
 - Terraform keeps update/security bulletin checks but disables the anonymous
   checkpoint signature.
-- `DO_NOT_TRACK`, `GH_TELEMETRY`, Graphite, Yarn, and Homebrew opt-outs are
+- `DO_NOT_TRACK`, `GH_TELEMETRY`, Grok, Graphite, Yarn, and Homebrew opt-outs are
   shared by Fish, Zsh, and Bash.
 - Gitleaks scans Git history and the working tree, including a dedicated rule
   that catches a hardcoded Flow Icons license.
