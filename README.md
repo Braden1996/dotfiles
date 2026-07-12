@@ -128,6 +128,8 @@ usage-data preference remains a manual consent setting.
   checkpoint signature.
 - `DO_NOT_TRACK`, `GH_TELEMETRY`, Grok, Graphite, Yarn, and Homebrew opt-outs are
   shared by Fish, Zsh, and Bash.
+- Grok also has telemetry, trace uploads, Mixpanel, and codebase uploads disabled
+  in `~/.grok/config.toml`.
 - Gitleaks scans Git history and the working tree, including a dedicated rule
   that catches a hardcoded Flow Icons license.
 - GitHub Actions, Neovim plugins, validation tools, mise artifacts, and tmux

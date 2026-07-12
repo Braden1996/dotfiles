@@ -233,6 +233,13 @@ done
 
 grep -Fq 'analytics off' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
 
+grok_config="$home_dir/.grok/config.toml"
+[[ -f "$grok_config" ]]
+grep -Eq '^[[:space:]]*telemetry[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*trace_upload[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*mixpanel_enabled[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*disable_codebase_upload[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$grok_config"
+
 for bash_file in "$home_dir/.bash_profile" "$home_dir/.bashrc" "$home_dir/.profile"; do
 	[[ ! -f "$bash_file" ]] || bash -n "$bash_file"
 done
