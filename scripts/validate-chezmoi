@@ -137,6 +137,7 @@ privacy_expected=(
 	"GRAPHITE_DISABLE_TELEMETRY=1"
 	"GROK_TELEMETRY_ENABLED=0"
 	"HOMEBREW_NO_ANALYTICS=1"
+	"SST_TELEMETRY_DISABLED=1"
 	"YARN_ENABLE_TELEMETRY=0"
 )
 
@@ -232,6 +233,8 @@ for cursor_setting in \
 done
 
 grep -Fq 'analytics off' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+grep -Fq 'gh config set telemetry disabled' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+grep -Fq 'sst telemetry disable' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
 
 grok_config="$home_dir/.grok/config.toml"
 [[ -f "$grok_config" ]]

@@ -1,9 +1,0 @@
-[features]
-telemetry = false
-
-[telemetry]
-trace_upload = false
-mixpanel_enabled = false
-
-[harness]
-disable_codebase_upload = true

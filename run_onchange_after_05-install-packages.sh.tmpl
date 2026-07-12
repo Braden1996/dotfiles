@@ -46,6 +46,21 @@ while IFS= read -r tap_name; do
 done < <(sed -nE 's/^[[:space:]]*tap[[:space:]]+"([^"]+)".*/\1/p' "$BREWFILE")
 
 "$BREW_BIN" analytics off >/dev/null
+
+if command -v gh >/dev/null 2>&1; then
+  gh config set telemetry disabled
+fi
+
+if command -v sst >/dev/null 2>&1; then
+  SST_TELEMETRY_DISABLED=1 sst telemetry disable
+fi
+
+# Yarn Classic has no telemetry setting. Configure Yarn Berry only when it is
+# the active home-level client, so its opt-out survives outside managed shells.
+if command -v yarn >/dev/null 2>&1 && [[ "$(yarn --version)" =~ ^[2-9][0-9]*\. ]]; then
+  yarn config set --home enableTelemetry 0
+fi
+
 "$BREW_BIN" trust --tap withgraphite/tap
 if "$BREW_BIN" bundle check --file="$BREWFILE" --no-upgrade >/dev/null 2>&1; then
   echo "Homebrew dependencies are already present."

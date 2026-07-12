@@ -126,8 +126,9 @@ usage-data preference remains a manual consent setting.
   updates remain on.
 - Terraform keeps update/security bulletin checks but disables the anonymous
   checkpoint signature.
-- `DO_NOT_TRACK`, `GH_TELEMETRY`, Grok, Graphite, Yarn, and Homebrew opt-outs are
-  shared by Fish, Zsh, and Bash.
+- `DO_NOT_TRACK`, `GH_TELEMETRY`, Grok, Graphite, SST, Yarn, and Homebrew
+  opt-outs are shared by Fish, Zsh, and Bash; the provisioning hook also
+  persists supported GitHub CLI, SST, and Yarn Berry choices.
 - Grok also has telemetry, trace uploads, Mixpanel, and codebase uploads disabled
   in `~/.grok/config.toml`.
 - Gitleaks scans Git history and the working tree, including a dedicated rule

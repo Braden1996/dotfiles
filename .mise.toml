@@ -22,7 +22,7 @@ run = [
 [tasks."check:data"]
 description = "Validate repository TOML and JSON data"
 run = [
-  "taplo lint --no-schema .chezmoidata.toml .chezmoiexternal.toml .gitleaks.toml .mise.toml dot_config/grok/config.toml dot_config/mise/config.toml dot_config/mise/mise.lock dot_config/starship.toml mise.lock",
+  "taplo lint --no-schema .chezmoidata.toml .chezmoiexternal.toml .gitleaks.toml .mise.toml dot_config/mise/config.toml dot_config/mise/mise.lock dot_config/starship.toml mise.lock",
   "for file in private_Library/private_Application\\ Support/private_Cursor/User/keybindings.json dot_config/nvim/dot_luarc.json dot_config/nvim/dot_neoconf.json; do biome format --json-parse-allow-comments=true --stdin-file-path \"$file\" < \"$file\" >/dev/null; done",
 ]
 

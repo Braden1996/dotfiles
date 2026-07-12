@@ -1,0 +1,12 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $config := dict -}}
+{{- if .chezmoi.stdin -}}
+{{- $config = fromToml .chezmoi.stdin -}}
+{{- end -}}
+{{- $features := mergeOverwrite (default (dict) (get $config "features")) (dict "telemetry" false) -}}
+{{- $telemetry := mergeOverwrite (default (dict) (get $config "telemetry")) (dict "trace_upload" false "mixpanel_enabled" false) -}}
+{{- $harness := mergeOverwrite (default (dict) (get $config "harness")) (dict "disable_codebase_upload" true) -}}
+{{- $_ := set $config "features" $features -}}
+{{- $_ := set $config "telemetry" $telemetry -}}
+{{- $_ := set $config "harness" $harness -}}
+{{ $config | toToml }}
