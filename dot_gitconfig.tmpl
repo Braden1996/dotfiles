@@ -1,42 +1,66 @@
 {{- $gpgKeyPersonalEmail := get . "gpgKeyPersonalEmail" -}}
+{{- $gpgKeyWorkEmail := get . "gpgKeyWorkEmail" -}}
+{{- $gpgKeySideProjectEmail := or (get . "gpgKeySideProjectEmail") "" -}}
+{{- $sideProjectEmail := or (get . "sideProjectEmail") "" -}}
+{{- $sideProjectGitHubRepo := or (get . "sideProjectGitHubRepo") "" -}}
 {{- $workGitHubOrg := get . "workGitHubOrg" -}}
 [alias]
     shit = commit --amend --no-edit
-    fuck = "!f(){ git shit && git push -f; };f"
-    ignore = "!f() { echo \"$1\" >> .gitignore; }; f"
+    fuck = "!f(){ git shit && git push --force-with-lease --force-if-includes; };f"
+    ignore = "!f() { printf '%s\\n' \"$1\" >> .gitignore; }; f"
     ls = log --pretty=format:"%C(yellow)%h\\ %Creset%s%Cblue\\ [%cn]\\%Cred%d" --decorate
     ll = ls --numstat
     last = --no-pager log -1 --oneline --color
-    nuke = "!f(){ git reset --hard && git clean -fd; };f"
     stash-unstaged = stash --keep-index -u
 [user]
-	name = {{ .gitName }}
-	email = {{ .personalEmail }}
+	name = {{ .gitName | quote }}
+	email = {{ .personalEmail | quote }}
 {{- if ne $gpgKeyPersonalEmail "" }}
-  signingkey = {{ $gpgKeyPersonalEmail }}
+	signingkey = {{ $gpgKeyPersonalEmail | quote }}
 {{- end }}
 {{ if eq .machineType "work" -}}
 {{- if ne $workGitHubOrg "" }}
 [includeIf "hasconfig:remote.*.url:git@github.com:{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
+    path = ~/.isembard.gitconfig
 [includeIf "hasconfig:remote.*.url:ssh://git@github.com/{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
+    path = ~/.isembard.gitconfig
 [includeIf "hasconfig:remote.*.url:https://github.com/{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
+    path = ~/.isembard.gitconfig
 {{- end }}
 {{ end -}}
+{{- if and (ne $sideProjectEmail "") (ne $sideProjectGitHubRepo "") }}
+[includeIf "hasconfig:remote.*.url:git@github.com:{{ $sideProjectGitHubRepo }}.git"]
+    path = ~/.higher.gitconfig
+[includeIf "hasconfig:remote.*.url:ssh://git@github.com/{{ $sideProjectGitHubRepo }}.git"]
+    path = ~/.higher.gitconfig
+[includeIf "hasconfig:remote.*.url:https://github.com/{{ $sideProjectGitHubRepo }}.git"]
+    path = ~/.higher.gitconfig
+{{- end }}
 [init]
-	defaultBranch = master
+	defaultBranch = main
 [push]
 	default = current
-{{- if ne $gpgKeyPersonalEmail "" }}
+	autoSetupRemote = true
+{{- if or (ne $gpgKeyPersonalEmail "") (ne $gpgKeySideProjectEmail "") (ne $gpgKeyWorkEmail "") }}
 [commit]
 	gpgsign = true
 [gpg]
 	program = gpg
 [tag]
-	forceSignAnnotated = true
+	gpgSign = true
 {{- end }}
 [pull]
-	default = current
 	rebase = false
+[core]
+	pager = delta
+[interactive]
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	line-numbers = true
+[merge]
+	conflictStyle = zdiff3
+[diff]
+	colorMoved = default
+[include]
+	path = ~/.gitconfig.local

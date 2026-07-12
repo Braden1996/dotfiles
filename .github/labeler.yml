@@ -5,35 +5,38 @@ shell:
           - 'dot_zshenv.tmpl'
           - 'dot_zprofile'
           - 'dot_bashrc'
+          - 'dot_bash_profile'
           - 'dot_profile'
           - 'dot_zsh_plugins.txt'
+          - 'dot_config/fish/**'
           - 'dot_config/zsh/**'
 
 git:
   - changed-files:
       - any-glob-to-any-file:
           - 'dot_gitconfig.tmpl'
-          - 'dot_attio.gitconfig'
+          - 'dot_isembard.gitconfig.tmpl'
           - 'dot_config/private_git/**'
 
 editor:
   - changed-files:
       - any-glob-to-any-file:
           - 'dot_config/nvim/**'
-          - 'dot_config/zed/**'
           - 'private_Library/**/Cursor/**'
 
 terminal:
   - changed-files:
       - any-glob-to-any-file:
           - 'dot_config/ghostty/**'
-          - 'dot_config/alacritty/**'
-          - 'dot_config/iterm2/**'
 
 ci:
   - changed-files:
       - any-glob-to-any-file:
           - '.github/**'
+          - '.gitleaks.toml'
+          - '.mise.toml'
+          - 'mise.lock'
+          - 'scripts/**'
 
 tmux:
   - changed-files:
@@ -44,5 +47,8 @@ chezmoi:
   - changed-files:
       - any-glob-to-any-file:
           - '.chezmoi.toml.tmpl'
+          - '.chezmoidata.toml'
+          - '.chezmoiexternal.toml'
           - '.chezmoiignore'
-          - 'run_once_*'
+          - '.chezmoiversion'
+          - 'run_*'

@@ -1,0 +1,11 @@
+{{- $gpgKeySideProjectEmail := or (get . "gpgKeySideProjectEmail") "" -}}
+[user]
+	name = {{ .gitName }}
+	email = {{ .sideProjectEmail }}
+{{- if ne $gpgKeySideProjectEmail "" }}
+  signingkey = {{ $gpgKeySideProjectEmail }}
+{{- end }}
+[commit]
+	gpgsign = {{ if ne $gpgKeySideProjectEmail "" }}true{{ else }}false{{ end }}
+[tag]
+	forceSignAnnotated = {{ if ne $gpgKeySideProjectEmail "" }}true{{ else }}false{{ end }}

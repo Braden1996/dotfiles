@@ -1,0 +1,20 @@
+[".tmux/plugins/tpm"]
+type = "archive"
+url = "https://codeload.github.com/tmux-plugins/tpm/tar.gz/e261deb1b47614eed3400089ce7197dc68acc4eb"
+exact = true
+stripComponents = 1
+checksum.sha256 = "72d92c512270d4857e27519ac97b92a52cf149afe4d92f26860c710f60bbbe37"
+
+[".tmux/plugins/tmux-sensible"]
+type = "archive"
+url = "https://codeload.github.com/tmux-plugins/tmux-sensible/tar.gz/25cb91f42d020f675bb0a2ce3fbd3a5d96119efa"
+exact = true
+stripComponents = 1
+checksum.sha256 = "0af1e1eb7139ded74fe03c1ebba7fb4533f5c7d345e42b73f718a9d822d88903"
+
+[".tmux/plugins/tmux"]
+type = "archive"
+url = "https://codeload.github.com/dracula/tmux/tar.gz/a4612670d77c8546690dc79d23eae591c6dfa8d3"
+exact = true
+stripComponents = 1
+checksum.sha256 = "970a0792ca8a1185dc6ad9c442a670100a28143fa5e739718b285a417d7c45f2"

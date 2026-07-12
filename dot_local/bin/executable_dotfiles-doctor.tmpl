@@ -1,0 +1,435 @@
+#!/bin/bash
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: dotfiles-doctor [--project PATH]
+
+Run workstation checks without changing managed state. With --project, also
+inspect an Nx workspace's telemetry choice and .cursorignore coverage.
+USAGE
+}
+
+project_path=""
+while (( $# > 0 )); do
+  case "$1" in
+    --project)
+      if (( $# < 2 )); then
+        echo "--project requires a path" >&2
+        exit 2
+      fi
+      project_path="$2"
+      shift
+      ;;
+    --project=*) project_path="${1#*=}" ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+configured_personal_key={{ get . "gpgKeyPersonalEmail" | default "" | quote }}
+configured_work_key={{ get . "gpgKeyWorkEmail" | default "" | quote }}
+personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
+work_email={{ get . "workEmail" | default "doctor@example.invalid" | quote }}
+
+ok_count=0
+warn_count=0
+fail_count=0
+
+pass() {
+  printf '[ok] %s\n' "$*"
+  ok_count=$((ok_count + 1))
+}
+
+warn() {
+  printf '[!!] %s\n' "$*"
+  warn_count=$((warn_count + 1))
+}
+
+fail() {
+  printf '[xx] %s\n' "$*"
+  fail_count=$((fail_count + 1))
+}
+
+note() {
+  printf '[--] %s\n' "$*"
+}
+
+indent() {
+  sed 's/^/     /'
+}
+
+check_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    pass "$1 is available"
+  else
+    fail "$1 is missing"
+  fi
+}
+
+check_optional_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    pass "$1 is available"
+  else
+    warn "$1 is not installed (optional)"
+  fi
+}
+
+check_env() {
+  local name="$1"
+  local expected="$2"
+  local actual
+  actual="$(printenv "$name" 2>/dev/null || true)"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "$name is set"
+  else
+    warn "$name is not active in this shell"
+  fi
+}
+
+check_secret_key() {
+  local label="$1"
+  local key="$2"
+
+  if [[ -z "$key" ]]; then
+    warn "$label GPG signing key is not configured in Chezmoi data"
+  elif gpg --list-secret-keys --with-colons "$key" 2>/dev/null | grep -q '^sec:'; then
+    pass "$label GPG secret key is available: $key"
+  else
+    fail "$label GPG secret key is unavailable: $key"
+  fi
+}
+
+sign_test_index=0
+test_signed_commit() {
+  local label="$1"
+  local key="$2"
+  local email="$3"
+  local repo commit_output
+
+  [[ -n "$key" ]] || return 0
+  sign_test_index=$((sign_test_index + 1))
+  repo="$sign_test_root/repo-$sign_test_index"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.name "Dotfiles Doctor"
+  git -C "$repo" config user.email "$email"
+  git -C "$repo" config user.signingkey "$key"
+  git -C "$repo" config gpg.program gpg
+  git -C "$repo" config commit.gpgsign true
+  printf 'signing test\n' > "$repo/payload.txt"
+  git -C "$repo" add payload.txt
+
+  commit_output="$(GPG_TTY="$(tty)" git -C "$repo" commit --no-verify -S -m "dotfiles doctor signing test" 2>&1)"
+  if [[ $? -eq 0 ]]; then
+    pass "$label disposable signed commit succeeded"
+  else
+    fail "$label disposable signed commit failed"
+    printf '%s\n' "$commit_output" | indent
+  fi
+}
+
+printf 'Dotfiles health check\n'
+printf '=====================\n\n'
+
+printf 'Core commands\n'
+check_command chezmoi
+check_command git
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  check_command brew
+else
+  check_optional_command brew
+fi
+check_command mise
+check_optional_command cursor
+check_optional_command safe-chain
+
+printf '\nGPG signing\n'
+if command -v gpg >/dev/null 2>&1; then
+  check_secret_key "personal" "$configured_personal_key"
+  check_secret_key "work" "$configured_work_key"
+
+  # Pinentry may legitimately prompt. Never attempt an active signing test when
+  # stdin/stdout are not attached to a user terminal (CI, pipes, editor tasks).
+  if [[ -t 0 && -t 1 ]]; then
+    if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
+      test_signed_commit "personal" "$configured_personal_key" "$personal_email"
+      if [[ "$configured_work_key" != "$configured_personal_key" ]]; then
+        test_signed_commit "work" "$configured_work_key" "$work_email"
+      fi
+      rm -rf -- "$sign_test_root"
+    else
+      fail "could not create a disposable directory for signed-commit checks"
+    fi
+  else
+    warn "disposable signed-commit test skipped because no interactive TTY is attached"
+  fi
+else
+  fail "gpg is unavailable; signing keys could not be checked"
+fi
+
+printf '\nChezmoi\n'
+if command -v chezmoi >/dev/null 2>&1; then
+  if chezmoi doctor --no-network; then
+    pass "chezmoi doctor passed without network access"
+  else
+    fail "chezmoi doctor reported a problem"
+  fi
+
+  chezmoi_status="$(chezmoi status 2>&1)"
+  if [[ -z "$chezmoi_status" ]]; then
+    pass "managed files match their target state"
+  else
+    warn "chezmoi has unapplied or locally modified targets"
+    printf '%s\n' "$chezmoi_status" | indent
+  fi
+
+  source_dir="$(chezmoi source-path 2>/dev/null || true)"
+  if [[ -n "$source_dir" && -d "$source_dir/.git" ]]; then
+    source_status="$(git -C "$source_dir" status --porcelain 2>/dev/null || true)"
+    if [[ -z "$source_status" ]]; then
+      pass "chezmoi source worktree is clean"
+    else
+      warn "chezmoi source worktree has uncommitted changes"
+      printf '%s\n' "$source_status" | indent
+    fi
+  fi
+fi
+
+printf '\nHomebrew\n'
+brewfile="$HOME/.config/homebrew/Brewfile"
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  pass "Homebrew provisioning is intentionally skipped off macOS"
+elif command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
+  brew_check="$(brew bundle check --file="$brewfile" --no-upgrade --verbose 2>&1)"
+  if [[ $? -eq 0 ]]; then
+    pass "all managed Homebrew dependencies are installed"
+  else
+    fail "managed Homebrew dependencies are missing"
+    printf '%s\n' "$brew_check" | indent
+  fi
+
+  analytics_state="$(brew analytics state 2>&1 || true)"
+  if printf '%s\n' "$analytics_state" | grep -Eqi 'disabled|destroyed'; then
+    pass "Homebrew analytics are disabled"
+  else
+    warn "Homebrew analytics state could not be confirmed"
+    printf '%s\n' "$analytics_state" | indent
+  fi
+else
+  fail "managed Brewfile is unavailable"
+fi
+
+printf '\nmise\n'
+if command -v mise >/dev/null 2>&1; then
+  mise_missing="$(mise ls --global --missing --no-header 2>&1)"
+  if [[ $? -ne 0 ]]; then
+    fail "mise could not inspect global tools"
+    printf '%s\n' "$mise_missing" | indent
+  elif [[ -n "$mise_missing" ]]; then
+    fail "mise-managed tools are missing"
+    printf '%s\n' "$mise_missing" | indent
+  else
+    pass "all globally managed mise tools are installed"
+  fi
+
+  tracking="$(mise settings get use_versions_host_track 2>/dev/null || true)"
+  if [[ "$tracking" == "false" ]]; then
+    pass "mise install tracking is disabled"
+  else
+    fail "mise use_versions_host_track is not false"
+  fi
+
+  if [[ -r "$HOME/.config/mise/mise.lock" ]]; then
+    pass "mise lockfile is present"
+  else
+    fail "mise lockfile is missing"
+  fi
+fi
+
+printf '\nPrivacy\n'
+{{ range $name, $value := .privacyEnv }}check_env {{ $name | quote }} {{ $value | quote }}
+{{ end }}
+if command -v gt >/dev/null 2>&1; then
+  warn "Graphite exposes no reliable telemetry-status query; GRAPHITE_DISABLE_TELEMETRY is best-effort and normal service metadata may still be logged"
+fi
+if [[ -r "$HOME/.terraformrc" ]] && grep -Eq '^[[:space:]]*disable_checkpoint_signature[[:space:]]*=[[:space:]]*true' "$HOME/.terraformrc"; then
+  pass "Terraform keeps security checks without the anonymous signature"
+else
+  fail "Terraform checkpoint-signature policy is missing"
+fi
+
+printf '\nCursor\n'
+cursor_manifest="$HOME/.config/cursor/extensions.txt"
+cursor_settings="$HOME/Library/Application Support/Cursor/User/settings.json"
+if [[ "$(uname -s)" == "Darwin" && -r "$cursor_settings" ]]; then
+  assert_cursor_setting() {
+    local key="$1"
+    local expected="$2"
+    local description="$3"
+    if grep -Eq "\"${key}\"[[:space:]]*:[[:space:]]*${expected}([[:space:]]*,)?[[:space:]]*$" "$cursor_settings"; then
+      pass "$description"
+    else
+      fail "$description"
+    fi
+  }
+
+  assert_cursor_setting "telemetry.telemetryLevel" '"off"' "Cursor core telemetry is off"
+  assert_cursor_setting "telemetry.feedback.enabled" 'false' "Cursor feedback telemetry is off"
+  assert_cursor_setting "gitlens.telemetry.enabled" 'false' "GitLens telemetry is off"
+  assert_cursor_setting "redhat.telemetry.enabled" 'false' "Red Hat extension telemetry is off"
+  assert_cursor_setting "security.workspace.trust.enabled" 'true' "Cursor workspace trust is enabled"
+  assert_cursor_setting "security.workspace.trust.startupPrompt" '"always"' "Cursor always prompts for workspace trust"
+  assert_cursor_setting "security.workspace.trust.untrustedFiles" '"newWindow"' "Cursor isolates untrusted files in a new window"
+  assert_cursor_setting "extensions.autoCheckUpdates" 'true' "Cursor checks extension updates"
+  assert_cursor_setting "extensions.autoUpdate" 'true' "Cursor automatically updates extensions"
+  assert_cursor_setting "update.mode" '"start"' "Cursor checks application updates at startup"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  fail "Cursor settings file is missing"
+else
+  pass "Cursor settings checks are intentionally skipped off macOS"
+fi
+
+if command -v cursor >/dev/null 2>&1 && [[ -r "$cursor_manifest" ]]; then
+  cursor_installed="$(cursor --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  cursor_missing=0
+  while IFS= read -r extension || [[ -n "$extension" ]]; do
+    extension="${extension%%#*}"
+    extension="$(printf '%s' "$extension" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [[ -z "$extension" ]] && continue
+    if ! grep -Fxiq -- "$extension" <<<"$cursor_installed"; then
+      warn "Cursor extension is missing: $extension"
+      cursor_missing=$((cursor_missing + 1))
+    fi
+  done < "$cursor_manifest"
+  if (( cursor_missing == 0 )); then
+    pass "all declared Cursor extensions are installed"
+  fi
+elif [[ -r "$cursor_manifest" ]]; then
+  warn "Cursor is unavailable; extension manifest was not checked"
+else
+  fail "Cursor extension manifest is missing"
+fi
+
+if [[ -n "$project_path" ]]; then
+  printf '\nProject privacy\n'
+  if [[ ! -d "$project_path" ]]; then
+    fail "project path is not a directory: $project_path"
+  else
+    project_path="$(cd "$project_path" && pwd -P)"
+    nx_json="$project_path/nx.json"
+    if [[ -r "$nx_json" ]]; then
+      if grep -Eq '"analytics"[[:space:]]*:[[:space:]]*false([[:space:],}]|$)' "$nx_json"; then
+        pass "Nx CLI analytics are disabled in $nx_json"
+      elif grep -Eq '"analytics"[[:space:]]*:[[:space:]]*true([[:space:],}]|$)' "$nx_json"; then
+        fail "Nx CLI analytics are explicitly enabled in $nx_json"
+      else
+        warn "Nx analytics are unset in $nx_json and may prompt on first interactive use"
+      fi
+    else
+      warn "no nx.json found at project root: $project_path"
+    fi
+
+    if [[ -s "$project_path/.cursorignore" ]]; then
+      pass "project has a non-empty .cursorignore"
+    else
+      source_dir="$(chezmoi source-path 2>/dev/null || true)"
+      warn "project lacks a non-empty .cursorignore; review $source_dir/assets/cursorignore.example"
+    fi
+  fi
+fi
+
+printf '\nTerminal integration\n'
+ghostty_config="$HOME/.config/ghostty/config"
+ghostty_bin=""
+if command -v ghostty >/dev/null 2>&1; then
+  ghostty_bin="$(command -v ghostty)"
+elif [[ -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]]; then
+  ghostty_bin=/Applications/Ghostty.app/Contents/MacOS/ghostty
+elif [[ -x "$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+  ghostty_bin="$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ -n "$ghostty_bin" && -r "$ghostty_config" ]]; then
+    ghostty_validation="$("$ghostty_bin" +validate-config --config-file="$ghostty_config" 2>&1)"
+    if [[ $? -eq 0 ]]; then
+      pass "Ghostty configuration validates"
+    else
+      fail "Ghostty configuration is invalid"
+      printf '%s\n' "$ghostty_validation" | indent
+    fi
+    if grep -Eq '^[[:space:]]*auto-update[[:space:]]*=[[:space:]]*check[[:space:]]*$' "$ghostty_config"; then
+      pass "Ghostty update checks are enabled without background installation"
+    else
+      fail "Ghostty auto-update policy is not set to check"
+    fi
+  else
+    fail "Ghostty binary or managed configuration is missing"
+  fi
+fi
+
+tmux_config="$HOME/.tmux.conf"
+if command -v tmux >/dev/null 2>&1 && [[ -r "$tmux_config" ]]; then
+  pass "tmux is available: $(tmux -V)"
+  if grep -Fq 'set -g default-terminal "tmux-256color"' "$tmux_config"; then
+    pass "tmux advertises tmux-256color"
+  else
+    fail "tmux default-terminal is not tmux-256color"
+  fi
+  if grep -Fq 'xterm-ghostty*:RGB:clipboard' "$tmux_config"; then
+    pass "tmux enables Ghostty RGB and clipboard features"
+  else
+    fail "tmux Ghostty terminal features are missing"
+  fi
+else
+  fail "tmux binary or managed configuration is missing"
+fi
+
+if infocmp tmux-256color >/dev/null 2>&1; then
+  pass "tmux-256color terminfo is available"
+else
+  fail "tmux-256color terminfo is unavailable"
+fi
+
+ghostty_terminfo=""
+if [[ -d /Applications/Ghostty.app/Contents/Resources/terminfo ]]; then
+  ghostty_terminfo=/Applications/Ghostty.app/Contents/Resources/terminfo
+elif [[ -d "$HOME/Applications/Ghostty.app/Contents/Resources/terminfo" ]]; then
+  ghostty_terminfo="$HOME/Applications/Ghostty.app/Contents/Resources/terminfo"
+fi
+if [[ -n "$ghostty_terminfo" ]] && TERMINFO="$ghostty_terminfo" infocmp xterm-ghostty >/dev/null 2>&1; then
+  pass "Ghostty's bundled xterm-ghostty terminfo is readable"
+else
+  warn "xterm-ghostty terminfo was not found outside a Ghostty session"
+fi
+
+printf '\ntmux externals\n'
+for plugin in tpm tmux-sensible tmux; do
+  if [[ -d "$HOME/.tmux/plugins/$plugin" ]]; then
+    pass "tmux plugin is present: $plugin"
+  else
+    fail "tmux plugin is missing: $plugin"
+  fi
+done
+
+printf '\nManual privacy checks\n'
+note "Cursor Privacy Mode is account/UI controlled; verify it in Cursor Settings > Privacy."
+if command -v op >/dev/null 2>&1 && op account list 2>/dev/null | grep -q .; then
+  note "Review Usage Data separately for each configured 1Password account."
+fi
+note "Review Docker Desktop's usage-statistics setting; do not track its mutable settings store."
+note "Review macOS Privacy & Security > Analytics & Improvements after OS migrations."
+
+printf '\nSummary: %d ok, %d warning(s), %d failure(s)\n' "$ok_count" "$warn_count" "$fail_count"
+if (( fail_count > 0 )); then
+  exit 1
+fi

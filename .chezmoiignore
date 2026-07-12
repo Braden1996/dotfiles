@@ -1,12 +1,21 @@
 README.md
 assets/**
+.github/**
+.gitleaks.toml
+.mise.toml
+mise.lock
+scripts/**
+
+{{- $sideProjectEmail := or (get . "sideProjectEmail") "" -}}
+{{ if eq $sideProjectEmail "" }}
+.higher.gitconfig
+{{ end }}
 
 {{ if ne .machineType "work" }}
-.attio.gitconfig
+.isembard.gitconfig
 {{ end }}
 
 {{ if ne .chezmoi.os "darwin" }}
 Library/**
 .config/ghostty/**
-.config/iterm2/**
 {{ end }}

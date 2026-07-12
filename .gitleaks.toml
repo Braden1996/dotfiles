@@ -1,0 +1,11 @@
+title = "dotfiles secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "cursor-flow-icons-license"
+description = "Cursor Flow Icons license key"
+regex = '''(?i)flow-icons\.licenseKey["']?\s*[:=]\s*["']([^"'{}\r\n]{8,})["']'''
+secretGroup = 1
+keywords = ["flow-icons.licenseKey"]

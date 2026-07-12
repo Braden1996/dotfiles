@@ -1,0 +1,33 @@
+# Copy the relevant lines into a project's .cursorignore. Keep source, lockfiles,
+# and migrations indexable; ignore generated output, dependencies, and secrets.
+
+# Dependencies and generated artifacts
+**/node_modules/
+**/.venv/
+**/__pycache__/
+**/.nx/cache/
+**/.nx/workspace-data/
+**/.turbo/
+**/dist/
+**/build/
+**/coverage/
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+
+# Local credentials and environment files
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/credentials.json
+**/service-account*.json
+
+# Editor and operating-system noise
+**/.DS_Store
+**/*.swp
+**/*~

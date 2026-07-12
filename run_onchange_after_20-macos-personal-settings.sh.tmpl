@@ -1,0 +1,175 @@
+{{- if and (eq .chezmoi.os "darwin") (eq .machineType "personal") -}}
+#!/bin/bash
+set -euo pipefail
+
+finder_changed=0
+dock_changed=0
+systemui_changed=0
+
+mark_changed() {
+  case "${1:-}" in
+    finder) finder_changed=1 ;;
+    dock) dock_changed=1 ;;
+    systemui) systemui_changed=1 ;;
+  esac
+}
+
+write_default() {
+  local domain="$1"
+  local key="$2"
+  local type="$3"
+  local value="$4"
+  local restart_target="${5:-}"
+  local current=""
+  local expected=""
+
+  current="$(defaults read "$domain" "$key" 2>/dev/null || true)"
+
+  case "$type" in
+    bool)
+      if [[ "$value" == "true" ]]; then
+        expected="1"
+      else
+        expected="0"
+      fi
+      ;;
+    int|string)
+      expected="$value"
+      ;;
+    *)
+      echo "Unsupported defaults type: $type" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ "$current" == "$expected" ]]; then
+    return
+  fi
+
+  echo "Setting $domain $key -> $value"
+  case "$type" in
+    bool) defaults write "$domain" "$key" -bool "$value" ;;
+    int) defaults write "$domain" "$key" -int "$value" ;;
+    string) defaults write "$domain" "$key" -string "$value" ;;
+  esac
+  mark_changed "$restart_target"
+}
+
+write_global_languages() {
+  local current=""
+
+  current="$(defaults read NSGlobalDomain AppleLanguages 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$current" == '("en-GB")' ]]; then
+    return
+  fi
+
+  echo "Setting NSGlobalDomain AppleLanguages -> en-GB"
+  defaults write NSGlobalDomain AppleLanguages -array "en-GB"
+}
+
+pmset_value() {
+  local section="$1"
+  local key="$2"
+
+  pmset -g custom | awk -v section="$section" -v key="$key" '
+    $0 == section ":" {
+      in_section = 1
+      next
+    }
+    /^[^[:space:]].*:$/ {
+      in_section = 0
+    }
+    in_section && $1 == key {
+      print $2
+      exit
+    }
+  '
+}
+
+ensure_idle_sleep_disabled() {
+  local needs_pmset=0
+  local section=""
+  local key=""
+
+  for section in "Battery Power" "AC Power"; do
+    for key in sleep displaysleep; do
+      if [[ "$(pmset_value "$section" "$key")" != "0" ]]; then
+        needs_pmset=1
+      fi
+    done
+  done
+
+  if [[ "$needs_pmset" -eq 0 ]]; then
+    return
+  fi
+
+  echo "Setting pmset sleep/display sleep -> never"
+  if sudo -n true 2>/dev/null || [[ -t 0 ]]; then
+    sudo pmset -a sleep 0 displaysleep 0
+  else
+    echo "Skipping pmset update because sudo requires an interactive terminal." >&2
+  fi
+}
+
+restart_if_needed() {
+  if [[ "$finder_changed" -eq 1 ]]; then
+    killall Finder >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$dock_changed" -eq 1 ]]; then
+    killall Dock >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$systemui_changed" -eq 1 ]]; then
+    killall SystemUIServer >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_idle_sleep_disabled
+
+# Global UI and input preferences.
+write_default NSGlobalDomain AppleInterfaceStyle string Dark
+write_default NSGlobalDomain InitialKeyRepeat int 25
+write_default NSGlobalDomain KeyRepeat int 2
+write_default NSGlobalDomain com.apple.swipescrolldirection bool false
+write_default NSGlobalDomain com.apple.trackpad.forceClick bool true
+write_default NSGlobalDomain AppleMiniaturizeOnDoubleClick bool false
+write_default NSGlobalDomain AppleLocale string en_GB
+write_global_languages
+
+# Finder preferences.
+write_default com.apple.finder ShowPathbar bool true finder
+write_default com.apple.finder ShowExternalHardDrivesOnDesktop bool true finder
+write_default com.apple.finder ShowRemovableMediaOnDesktop bool true finder
+write_default com.apple.finder ShowHardDrivesOnDesktop bool false finder
+write_default com.apple.finder FXICloudDriveDesktop bool false finder
+write_default com.apple.finder FXICloudDriveDocuments bool false finder
+write_default com.apple.finder FXPreferredViewStyle string icnv finder
+write_default com.apple.finder FXPreferredGroupBy string Kind finder
+write_default com.apple.finder FXArrangeGroupViewBy string Name finder
+
+# Dock and menu bar preferences.
+write_default com.apple.dock orientation string right dock
+write_default com.apple.dock tilesize int 114 dock
+write_default com.apple.dock autohide bool false dock
+write_default com.apple.menuextra.clock ShowDayOfWeek bool true systemui
+write_default com.apple.menuextra.clock ShowAMPM bool true systemui
+write_default com.apple.menuextra.clock ShowDate bool false systemui
+write_default com.apple.controlcenter "NSStatusItem VisibleCC Battery" bool true systemui
+write_default com.apple.controlcenter "NSStatusItem VisibleCC WiFi" bool true systemui
+write_default com.apple.controlcenter "NSStatusItem VisibleCC Clock" bool true systemui
+write_default com.apple.controlcenter "NSStatusItem VisibleCC NowPlaying" bool true systemui
+write_default com.apple.controlcenter "NSStatusItem VisibleCC BentoBox-0" bool true systemui
+
+# Window management preferences.
+write_default com.apple.WindowManager EnableTiledWindowMargins bool false
+
+restart_if_needed
+
+echo "Personal macOS settings are configured."
+{{ else -}}
+#!/bin/bash
+set -euo pipefail
+
+echo "Skipping personal macOS settings on {{ .chezmoi.os }}/{{ .machineType }}."
+{{ end }}

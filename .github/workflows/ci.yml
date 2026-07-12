@@ -6,103 +6,105 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_VERSION: 2026.7.5
+
 jobs:
-  lint-templates:
-    name: Lint templates
-    runs-on: ubuntu-latest
+  static:
+    name: Static validation
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install chezmoi
-        run: sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"
-
-      - name: Create test config
+      - name: Install platform validators
         run: |
-          mkdir -p "$HOME/.config/chezmoi"
-          cat > "$HOME/.config/chezmoi/chezmoi.toml" <<'EOF'
-          [data]
-            machineType = "personal"
-            gitName = "Test"
-            personalEmail = "test@example.com"
-            workEmail = ""
-            workGitHubOrg = ""
-            onePasswordAccount = "test.1password.com"
-          EOF
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes fish neovim tmux zsh
 
-      - name: Validate templates
-        run: |
-          status=0
-          while IFS= read -r -d '' f; do
-            echo "--- $f"
-            if ! "$HOME/bin/chezmoi" execute-template < "$f" > /dev/null 2>&1; then
-              echo "FAIL: $f"
-              "$HOME/bin/chezmoi" execute-template < "$f" || true
-              status=1
-            fi
-          done < <(find . -name '*.tmpl' -not -path './.git/*' -not -name '.chezmoi.toml.tmpl' -print0)
-          exit $status
+      - name: Install validation toolchain
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: ${{ env.MISE_VERSION }}
 
-  lint-shell:
-    name: Lint shell scripts
-    runs-on: ubuntu-latest
+      - name: Run static checks
+        run: mise run check
+
+      - name: Assert validation did not modify tracked files
+        run: git diff --exit-code
+
+  chezmoi:
+    name: ${{ matrix.os }} / ${{ matrix.profile }} / chezmoi ${{ matrix.chezmoi }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        profile: [personal, work]
+        chezmoi: ["2.70.0", "2.71.0"]
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
-      - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
+      - name: Install mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
 
-      - name: Shellcheck .sh.tmpl files
-        run: |
-          status=0
-          while IFS= read -r -d '' f; do
-            echo "--- $f"
-            cleaned=$(mktemp)
-            sed 's/{{.*}}//g' "$f" > "$cleaned"
-            if ! shellcheck --shell=bash --exclude=SC1090,SC1091 "$cleaned"; then
-              status=1
-            fi
-            rm "$cleaned"
-          done < <(find . -name '*.sh.tmpl' -not -path './.git/*' -print0)
-          exit $status
+      - name: Install selected chezmoi version
+        env:
+          CHEZMOI_VERSION: ${{ matrix.chezmoi }}
+        run: mise install "chezmoi@$CHEZMOI_VERSION"
 
-      - name: Shellcheck static shell files
-        run: |
-          status=0
-          for f in dot_bashrc dot_profile; do
-            if [ -f "$f" ]; then
-              echo "--- $f"
-              if ! shellcheck --shell=bash --exclude=SC1090,SC1091 "$f"; then
-                status=1
-              fi
-            fi
-          done
-          exit $status
+      - name: Render and apply twice in a disposable home
+        env:
+          CHEZMOI_VERSION: ${{ matrix.chezmoi }}
+          PROFILE: ${{ matrix.profile }}
+        run: CHEZMOI_BIN="$(mise where "chezmoi@$CHEZMOI_VERSION")/chezmoi" scripts/validate-chezmoi "$PROFILE"
 
-  validate-json:
-    name: Validate JSON
-    runs-on: ubuntu-latest
+      - name: Assert validation did not modify tracked files
+        run: git diff --exit-code
+
+  macos-terminal-smoke:
+    name: macOS Ghostty/tmux smoke
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
-      - name: Install chezmoi
-        run: sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"
-
-      - name: Create test config
+      - name: Install terminal validators
         run: |
-          mkdir -p "$HOME/.config/chezmoi"
-          cat > "$HOME/.config/chezmoi/chezmoi.toml" <<'EOF'
-          [data]
-            machineType = "personal"
-            gitName = "Test"
-            personalEmail = "test@example.com"
-            workEmail = ""
-            workGitHubOrg = ""
-            onePasswordAccount = "test.1password.com"
-          EOF
+          brew install --formula tmux
+          brew install --cask ghostty
+          command -v tmux
+          test -x /Applications/Ghostty.app/Contents/MacOS/ghostty
 
-      - name: Validate editor JSON templates
-        run: |
-          "$HOME/bin/chezmoi" execute-template < dot_config/zed/settings.json.tmpl | jq . > /dev/null
-          "$HOME/bin/chezmoi" execute-template < "private_Library/private_Application Support/private_Cursor/User/settings.json.tmpl" \
-            | sed '/^[[:space:]]*\/\//d' \
-            | jq . > /dev/null
+      - name: Install mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+
+      - name: Install pinned chezmoi
+        run: mise install chezmoi@2.71.0
+
+      - name: Validate rendered terminal configuration
+        run: CHEZMOI_BIN="$(mise where chezmoi@2.71.0)/chezmoi" scripts/validate-chezmoi personal
+
+      - name: Assert validation did not modify tracked files
+        run: git diff --exit-code

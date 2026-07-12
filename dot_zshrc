@@ -12,10 +12,3 @@ unset config
 
 # Flush any remaining Zephyr post-zshrc hooks before the first prompt.
 (( $+functions[run_post_zshrc] )) && run_post_zshrc
-
-# Finalize startup timing after all startup hooks have run.
-if [[ -n "${_ZSH_START_REAL-}" ]]; then
-  export ZSH_STARTUP_MS=$(( (EPOCHREALTIME - _ZSH_START_REAL) * 1000 ))
-  ZSH_STARTUP_MS=${ZSH_STARTUP_MS%%.*}
-  unset _ZSH_START_REAL
-fi

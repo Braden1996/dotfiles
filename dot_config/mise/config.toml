@@ -1,9 +1,13 @@
 # Global runtime defaults for shells and editors.
 
 [settings]
-idiomatic_version_file_enable_tools = ["node", "python", "ruby"]
+idiomatic_version_file_enable_tools = ["node", "python", "ruby", "npm"]
+lockfile = true
+use_versions_host_track = false
 
 [tools]
-node = "22.16.0"
-python = "3.13.3"
+biome = "2"
+node = "22"
+python = "3.13"
 rust = "stable"
+terraform = "1.15"

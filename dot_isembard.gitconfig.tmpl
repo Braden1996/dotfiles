@@ -1,0 +1,7 @@
+{{- $gpgKeyWorkEmail := get . "gpgKeyWorkEmail" -}}
+[user]
+	name = {{ .gitName | quote }}
+	email = {{ .workEmail | quote }}
+{{- if ne $gpgKeyWorkEmail "" }}
+	signingkey = {{ $gpgKeyWorkEmail | quote }}
+{{- end }}

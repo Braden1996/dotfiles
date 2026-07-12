@@ -16,6 +16,8 @@ zstyle ':zephyr:plugin:prompt' immediate yes
 
 # Completion configuration
 zstyle ':zephyr:plugin:completion' use-cache yes
+# The bundle adds zsh-completions to fpath before Zephyr loads, then runs
+# compinit before fzf-tab and other widget-wrapping plugins.
 zstyle ':zephyr:plugin:completion' immediate yes
 
 # Magic enter configuration (must be before magic-enter plugin loads)
@@ -51,11 +53,18 @@ unset antidote_script
 
 # Static plugin loading (faster than dynamic)
 # Regenerate with: antidote bundle < ~/.zsh_plugins.txt > ~/.zsh_plugins.zsh
-if [[ ! -f ~/.zsh_plugins.zsh ]] || [[ ~/.zsh_plugins.txt -nt ~/.zsh_plugins.zsh ]]; then
-  # Atomic write to prevent race conditions
-  local tmpfile="${TMPDIR:-/tmp}/zsh_plugins.$$.zsh"
-  antidote bundle < ~/.zsh_plugins.txt > "$tmpfile" && mv "$tmpfile" ~/.zsh_plugins.zsh
-  # Compile for faster loading
-  zcompile ~/.zsh_plugins.zsh
+if [[ ! -s ~/.zsh_plugins.zsh ]] || [[ ~/.zsh_plugins.txt -nt ~/.zsh_plugins.zsh ]]; then
+  local tmpfile
+  tmpfile=$(mktemp "${TMPDIR:-/tmp}/zsh_plugins.XXXXXXXX.zsh") || return 1
+
+  if antidote bundle < ~/.zsh_plugins.txt >| "$tmpfile" && [[ -s "$tmpfile" ]]; then
+    mv -f "$tmpfile" ~/.zsh_plugins.zsh
+    zcompile ~/.zsh_plugins.zsh 2>/dev/null || true
+  else
+    rm -f "$tmpfile"
+    print -P "%F{yellow}[zshrc] plugin bundle regeneration failed; using the previous bundle%f" >&2
+    [[ -s ~/.zsh_plugins.zsh ]] || return 1
+  fi
 fi
-source ~/.zsh_plugins.zsh
+
+[[ -r ~/.zsh_plugins.zsh ]] && source ~/.zsh_plugins.zsh

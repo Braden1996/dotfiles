@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+
+# mise config source hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+# mise lock source hash: {{ include "dot_config/mise/mise.lock" | sha256sum }}
+
+if [[ "{{ .chezmoi.os }}" != "darwin" ]]; then
+  echo "The managed mise lock currently targets macOS arm64; skipping."
+  exit 0
+fi
+
+if ! command -v mise >/dev/null 2>&1; then
+  echo "mise is unavailable; skipping managed tool installation."
+  exit 0
+fi
+
+mise trust --yes {{ printf "%s/.config/mise/config.toml" .chezmoi.homeDir | quote }} >/dev/null
+echo "Installing locked mise-managed tools..."
+mise install --yes --locked -C {{ .chezmoi.homeDir | quote }}
+echo "mise tool installation complete."

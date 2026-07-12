@@ -6,9 +6,7 @@ return {
       local group = vim.api.nvim_create_augroup("BradenProjectConfig", { clear = true })
       local loaded_paths = {}
 
-      local function normalize(path)
-        return path and vim.fs.normalize(path) or nil
-      end
+      local function normalize(path) return path and vim.fs.normalize(path) or nil end
 
       local function git_root(start)
         local marker = vim.fs.find(".git", {
@@ -73,7 +71,7 @@ return {
         return source_trusted(path)
       end
 
-      vim.api.nvim_create_user_command("TrustG", function(opts)
+      vim.api.nvim_create_user_command("TrustG", function()
         local cwd = normalize(vim.fn.getcwd())
         local root = normalize(git_root(cwd))
         local path = normalize(config_path(root))
@@ -99,14 +97,10 @@ return {
 
       vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged" }, {
         group = group,
-        callback = function()
-          load_git_root_config { skip_root = true }
-        end,
+        callback = function() load_git_root_config { skip_root = true } end,
       })
 
-      vim.schedule(function()
-        load_git_root_config { skip_root = true }
-      end)
+      vim.schedule(function() load_git_root_config { skip_root = true } end)
     end,
   },
 }

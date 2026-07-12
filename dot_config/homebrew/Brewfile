@@ -1,0 +1,40 @@
+# Homebrew Bundle installs missing dependencies only. Upgrades are explicit via
+# dotfiles-update so a normal chezmoi apply remains predictable.
+
+# Third-party taps are also allowlisted by the package-install hook.
+tap "withgraphite/tap"
+
+# Shell and prompt
+brew "antidote"
+brew "fish"
+brew "starship"
+brew "zsh"
+
+# Core CLI tools
+brew "bat"
+brew "chezmoi"
+brew "eza"
+brew "fd"
+brew "fzf"
+brew "hyperfine"
+brew "jq"
+brew "ripgrep"
+brew "yazi"
+brew "zoxide"
+
+# Development and validation
+brew "gh"
+brew "git"
+brew "git-delta"
+brew "gnupg"
+brew "mise"
+brew "shellcheck"
+brew "shfmt"
+brew "taplo"
+brew "tmux"
+brew "withgraphite/tap/graphite"
+
+# Desktop tools
+cask "cursor"
+cask "font-fira-code-nerd-font"
+cask "ghostty"

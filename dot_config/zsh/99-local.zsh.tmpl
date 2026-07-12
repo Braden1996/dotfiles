@@ -11,10 +11,8 @@ if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
   [[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
 fi
 
-# 1Password-backed secrets
-# To enable 1Password integration, uncomment and adjust the op:// URIs below.
-# Requires `op` CLI to be installed and configured.
-# export NGROK_AUTHTOKEN="$(op read 'op://Private/ngrok/credential' --account {{ .onePasswordAccount }})"
+# Optional secret-manager integration can be added here later.
+# export NGROK_AUTHTOKEN="$(op read 'op://Private/ngrok/credential')"
 # Optional: set a default Nx workspace if you want `nx` to work outside a repo.
 # export BRADEN_NX_DEFAULT_WORKSPACE="$HOME/Development/Phoenix"
 
@@ -25,16 +23,6 @@ fi
 yarn() { __braden_zsh_run_wrapped_command yarn "$@"; }
 pnpm() { __braden_zsh_run_wrapped_command pnpm "$@"; }
 pnpx() { __braden_zsh_run_wrapped_command pnpx "$@"; }
-
-# Clear startup time after first command so it only shows on the initial prompt.
-_clear_startup_time() {
-  unset ZSH_STARTUP_MS
-  add-zsh-hook -d preexec _clear_startup_time
-}
-if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
-  autoload -Uz add-zsh-hook
-  add-zsh-hook preexec _clear_startup_time
-fi
 
 # =============================================================================
 # Final PATH cleanup (deduplicate after all sources)

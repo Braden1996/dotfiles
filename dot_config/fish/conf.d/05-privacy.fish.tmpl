@@ -1,0 +1,3 @@
+# Generated from the static privacyEnv map in .chezmoidata.toml.
+{{ range $name, $value := .privacyEnv }}set -gx {{ $name }} {{ $value | quote }}
+{{ end }}

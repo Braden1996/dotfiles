@@ -1,13 +1,19 @@
-if [ -d "$HOME/.local/bin" ]; then
-  case ":$PATH:" in
-    *":$HOME/.local/bin:"*) ;;
-    *) export PATH="$HOME/.local/bin:$PATH" ;;
-  esac
+# Keep non-interactive Bash invocations deterministic.
+case $- in
+  *i*) ;;
+  *) return ;;
+esac
+
+# Non-login interactive shells do not read ~/.profile themselves.
+if ! shopt -q login_shell && [ -r "$HOME/.profile" ]; then
+  . "$HOME/.profile"
 fi
 
-# Bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+# Keep history local, append across sessions, and omit space-prefixed commands.
+HISTCONTROL=ignoreboth:erasedups
+HISTSIZE=50000
+HISTFILESIZE=50000
+shopt -s histappend
 
 # Safe-chain bash initialization
-[[ -f ~/.safe-chain/scripts/init-posix.sh ]] && source ~/.safe-chain/scripts/init-posix.sh
+[[ -f "$HOME/.safe-chain/scripts/init-posix.sh" ]] && source "$HOME/.safe-chain/scripts/init-posix.sh"

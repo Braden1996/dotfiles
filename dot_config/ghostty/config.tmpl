@@ -34,9 +34,10 @@ background-blur-radius = 40
 unfocused-split-opacity = 0.9
 
 # -----------------------------------------------------------------------------
-# Shell
+# Updates
 # -----------------------------------------------------------------------------
-command = {{ printf "%s/.local/bin/ghostty-fish" .chezmoi.homeDir }}
+# Check at startup without downloading or installing in the background.
+auto-update = check
 
 # -----------------------------------------------------------------------------
 # Cursor

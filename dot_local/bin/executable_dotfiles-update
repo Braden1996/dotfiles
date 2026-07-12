@@ -1,0 +1,194 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: dotfiles-update [--check] [--refresh-antidote-pins]
+
+Without flags, fast-forward the Chezmoi source, apply it, upgrade only the
+packages declared by the managed Brewfile, upgrade mise tools within their
+configured series, and update declared Cursor extensions.
+
+  --check  Report available updates and run dotfiles-doctor without changing
+           managed files or installed versions.
+  --refresh-antidote-pins
+           Explicitly refresh every pinned Antidote plugin to its upstream
+           HEAD. This changes the Chezmoi source and is never done by default.
+  -h       Show this help.
+USAGE
+}
+
+check_only=false
+refresh_antidote_pins=false
+while (( $# > 0 )); do
+  case "$1" in
+    --check) check_only=true ;;
+    --refresh-antidote-pins) refresh_antidote_pins=true ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if $check_only && $refresh_antidote_pins; then
+  echo "--check and --refresh-antidote-pins cannot be combined" >&2
+  exit 2
+fi
+
+if ! command -v chezmoi >/dev/null 2>&1; then
+  echo "chezmoi is required" >&2
+  exit 1
+fi
+
+brewfile="$HOME/.config/homebrew/Brewfile"
+mise_lock="$HOME/.config/mise/mise.lock"
+source_dir="$(chezmoi source-path)"
+
+if $check_only; then
+  status=0
+  if command -v dotfiles-doctor >/dev/null 2>&1; then
+    dotfiles-doctor || status=$?
+  else
+    echo "dotfiles-doctor is not installed; run chezmoi apply first." >&2
+    status=1
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
+    printf '\nOutdated managed Homebrew dependencies\n'
+    formulae="$(brew bundle list --file="$brewfile" --formula)"
+    casks="$(brew bundle list --file="$brewfile" --cask)"
+    if [[ -n "$formulae" ]]; then
+      # Brew formula and cask tokens cannot contain whitespace.
+      # shellcheck disable=SC2086
+      brew outdated $formulae || true
+    fi
+    if [[ -n "$casks" ]]; then
+      # shellcheck disable=SC2086
+      brew outdated --cask $casks || true
+    fi
+  fi
+  if command -v mise >/dev/null 2>&1; then
+    printf '\nOutdated mise tools within configured series\n'
+    mise outdated -C "$HOME" || true
+  fi
+  exit "$status"
+fi
+
+if [[ -d "$source_dir/.git" ]]; then
+  source_status="$(git -C "$source_dir" status --porcelain)"
+  if [[ -n "$source_status" ]]; then
+    echo "Refusing to update with uncommitted Chezmoi source changes:" >&2
+    printf '%s\n' "$source_status" | sed 's/^/  /' >&2
+    echo "Commit or stash them, then run dotfiles-update again." >&2
+    exit 1
+  fi
+
+  if git -C "$source_dir" rev-parse --verify '@{upstream}' >/dev/null 2>&1; then
+    echo "Fast-forwarding Chezmoi source..."
+    git -C "$source_dir" pull --ff-only
+  else
+    echo "Chezmoi source has no upstream; skipping pull."
+  fi
+fi
+
+if $refresh_antidote_pins; then
+  antidote_manifest="$source_dir/dot_zsh_plugins.txt"
+  if [[ ! -r "$antidote_manifest" ]]; then
+    echo "Antidote manifest is missing: $antidote_manifest" >&2
+    exit 1
+  fi
+
+  pin_tmp="$(mktemp "${TMPDIR:-/tmp}/dotfiles-antidote-pins.XXXXXX")"
+  echo "Refreshing explicitly pinned Antidote plugins..."
+  while IFS= read -r plugin_line || [[ -n "$plugin_line" ]]; do
+    case "$plugin_line" in
+      ''|'#'*)
+        printf '%s\n' "$plugin_line" >> "$pin_tmp"
+        continue
+        ;;
+    esac
+
+    if [[ "$plugin_line" != *" pin:"* ]]; then
+      printf '%s\n' "$plugin_line" >> "$pin_tmp"
+      continue
+    fi
+
+    plugin_repo="${plugin_line%% *}"
+    if ! plugin_sha="$(git ls-remote "https://github.com/${plugin_repo}.git" HEAD | awk 'NR == 1 { print $1 }')"; then
+      rm -f "$pin_tmp"
+      echo "Failed to resolve Antidote plugin: $plugin_repo" >&2
+      exit 1
+    fi
+    if [[ ! "$plugin_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      rm -f "$pin_tmp"
+      echo "Upstream returned an invalid commit for $plugin_repo" >&2
+      exit 1
+    fi
+
+    printf '%s\n' "$plugin_line" | sed -E "s/pin:[0-9a-fA-F]{40}/pin:${plugin_sha}/" >> "$pin_tmp"
+  done < "$antidote_manifest"
+
+  if cmp -s "$antidote_manifest" "$pin_tmp"; then
+    rm -f "$pin_tmp"
+    echo "Antidote pins are already current."
+  else
+    mv -f "$pin_tmp" "$antidote_manifest"
+    echo "Antidote pins refreshed; review their source diff before committing."
+  fi
+fi
+
+echo "Applying managed dotfiles and pinned externals..."
+chezmoi apply
+
+if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
+  export HOMEBREW_NO_ANALYTICS=1
+  export HOMEBREW_REQUIRE_TAP_TRUST=1
+
+  while IFS= read -r tap_name; do
+    case "$tap_name" in
+      withgraphite/tap) ;;
+      *)
+        echo "Refusing unreviewed Homebrew tap: $tap_name" >&2
+        exit 1
+        ;;
+    esac
+  done < <(sed -nE 's/^[[:space:]]*tap[[:space:]]+"([^"]+)".*/\1/p' "$brewfile")
+
+  brew trust --tap withgraphite/tap
+  echo "Updating Homebrew metadata and managed dependencies..."
+  brew update
+  brew bundle install --file="$brewfile"
+fi
+
+if command -v mise >/dev/null 2>&1; then
+  echo "Upgrading mise tools within their configured version series..."
+  mise upgrade --yes -C "$HOME"
+  mise install --yes --locked -C "$HOME"
+
+  # mise updates the target lockfile. Bring that generated lock back into the
+  # source state so the next machine receives the same exact versions.
+  if [[ -r "$mise_lock" ]]; then
+    chezmoi re-add "$mise_lock"
+  fi
+fi
+
+if command -v cursor >/dev/null 2>&1; then
+  echo "Updating installed Cursor extensions..."
+  cursor --update-extensions
+fi
+
+if command -v dotfiles-doctor >/dev/null 2>&1; then
+  dotfiles-doctor
+fi
+
+if [[ -d "$source_dir/.git" ]] && [[ -n "$(git -C "$source_dir" status --porcelain)" ]]; then
+  printf '\nThe mise lockfile or other generated state changed. Review and commit:\n'
+  git -C "$source_dir" status --short
+fi

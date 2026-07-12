@@ -1,0 +1,228 @@
+# =============================================================================
+# Functions (defined before UI plugins so widgets are wrapped once)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Yazi file picker integration
+# -----------------------------------------------------------------------------
+yazi_choose() {
+  (( $+commands[yazi] )) || return 127
+
+  local tmpfile="$(mktemp)" selection
+  yazi --chooser-file="$tmpfile" >/dev/tty
+  if [[ -f "$tmpfile" && -s "$tmpfile" ]]; then
+    selection=$(<"$tmpfile")
+    LBUFFER+="${(q)selection}"
+  fi
+  rm -f "$tmpfile"
+  zle redisplay
+}
+zle -N yazi_choose
+
+yazi_cd() {
+  (( $+commands[yazi] )) || return 127
+
+  local tmpfile="$(mktemp)"
+  yazi --chooser-file="$tmpfile" >/dev/tty
+  if [[ -f "$tmpfile" && -s "$tmpfile" ]]; then
+    local selection=$(<"$tmpfile")
+    rm -f "$tmpfile"
+    if [[ -d "$selection" ]]; then
+      cd "$selection"
+      zle reset-prompt
+    fi
+  else
+    rm -f "$tmpfile"
+  fi
+}
+zle -N yazi_cd
+
+# -----------------------------------------------------------------------------
+# Corepack-backed package manager wrappers
+# -----------------------------------------------------------------------------
+__braden_zsh_print_safe_chain_warning() {
+  [[ -n "${__BRADEN_SAFE_CHAIN_WARNED:-}" ]] && return
+
+  typeset -g __BRADEN_SAFE_CHAIN_WARNED=1
+  print -P "%K{yellow}%F{black}Warning:%f%k safe-chain is not available to protect you from installing malware. $1 will run without it."
+  print -P "Install safe-chain by using %F{cyan}npm install -g @aikidosec/safe-chain%f."
+}
+
+__braden_zsh_resolve_wrapped_command() {
+  local original_cmd="$1"
+
+  if (( $+commands[$original_cmd] )); then
+    print -r -- "${commands[$original_cmd]}"
+    return 0
+  fi
+
+  case "$original_cmd" in
+    yarn|pnpm)
+      (( $+commands[corepack] )) || return 1
+      print -r -- "corepack"
+      print -r -- "$original_cmd"
+      ;;
+    pnpx)
+      (( $+commands[corepack] )) || return 1
+      print -r -- "corepack"
+      print -r -- "pnpm"
+      print -r -- "dlx"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+__braden_zsh_run_wrapped_command() {
+  local original_cmd="$1"
+  shift
+
+  local -a resolved_cmd
+  resolved_cmd=("${(@f)$(__braden_zsh_resolve_wrapped_command "$original_cmd")}")
+
+  if (( $+commands[safe-chain] && $+commands[$original_cmd] )); then
+    safe-chain "$original_cmd" "$@"
+    return
+  fi
+
+  if (( !$+commands[safe-chain] )); then
+    __braden_zsh_print_safe_chain_warning "$original_cmd"
+  fi
+
+  if (( ${#resolved_cmd[@]} )); then
+    "${resolved_cmd[@]}" "$@"
+  else
+    command "$original_cmd" "$@"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Dependency check (run manually with: zsh-check-deps)
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Nx workspace wrapper
+# -----------------------------------------------------------------------------
+__braden_nx_is_workspace_root() {
+  [[ -n "$1" ]] || return 1
+  [[ -f "$1/nx.json" || -x "$1/node_modules/.bin/nx" ]]
+}
+
+__braden_nx_find_workspace_root() {
+  local dir="${1:A}"
+
+  while true; do
+    if __braden_nx_is_workspace_root "$dir"; then
+      print -r -- "$dir"
+      return 0
+    fi
+
+    [[ "$dir" == "/" ]] && return 1
+    dir="${dir:h}"
+  done
+}
+
+__braden_nx_workspace_root() {
+  local workspace_root
+
+  workspace_root="$(__braden_nx_find_workspace_root "$PWD")" && {
+    print -r -- "$workspace_root"
+    return 0
+  }
+
+  if [[ -n "${BRADEN_NX_DEFAULT_WORKSPACE:-}" ]] && __braden_nx_is_workspace_root "$BRADEN_NX_DEFAULT_WORKSPACE"; then
+    print -r -- "${BRADEN_NX_DEFAULT_WORKSPACE:A}"
+    return 0
+  fi
+
+  return 1
+}
+
+__braden_nx_local_bin() {
+  local workspace_root="$1"
+  local nx_bin="$workspace_root/node_modules/.bin/nx"
+
+  [[ -x "$nx_bin" ]] || return 1
+  print -r -- "$nx_bin"
+}
+
+__braden_nx_global_bin() {
+  local nx_bin="$HOME/.bun/bin/nx"
+
+  [[ -x "$nx_bin" ]] || return 1
+  print -r -- "$nx_bin"
+}
+
+nx() {
+  local workspace_root nx_bin global_nx_bin
+
+  workspace_root="$(__braden_nx_workspace_root)" || workspace_root=""
+  if [[ -n "$workspace_root" ]]; then
+    nx_bin="$(__braden_nx_local_bin "$workspace_root")" || nx_bin=""
+    if [[ -n "$nx_bin" ]]; then
+      if (( $+commands[mise] )); then
+        mise exec -C "$workspace_root" -- "$nx_bin" "$@"
+      else
+        (cd "$workspace_root" && "$nx_bin" "$@")
+      fi
+      return
+    fi
+  fi
+
+  global_nx_bin="$(__braden_nx_global_bin)" || global_nx_bin=""
+  if [[ -n "$global_nx_bin" ]]; then
+    "$global_nx_bin" "$@"
+    return
+  fi
+
+  if [[ -n "$workspace_root" ]]; then
+    echo "nx is not available at $workspace_root/node_modules/.bin/nx, and $HOME/.bun/bin/nx was not found." >&2
+  else
+    echo "No Nx workspace found from $PWD, and $HOME/.bun/bin/nx was not found. Set BRADEN_NX_DEFAULT_WORKSPACE to enable nx outside a repo." >&2
+  fi
+
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# Dependency check (run manually with: zsh-check-deps)
+# -----------------------------------------------------------------------------
+zsh-check-deps() {
+  local -a required=(starship fzf mise)
+  local -a optional=(eza bat yazi zoxide)
+  local -a missing_required=() missing_optional=()
+  local antidote_missing=0
+  local antidote_homebrew="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/antidote/share/antidote/antidote.zsh"
+  local antidote_cache="$ANTIDOTE_HOME/antidote.zsh"
+
+  # Antidote can come from Homebrew or a git clone cache.
+  if [[ ! -f "$antidote_homebrew" && ! -f "$antidote_cache" ]]; then
+    antidote_missing=1
+  fi
+
+  for cmd in $required; do
+    command -v $cmd &>/dev/null || missing_required+=($cmd)
+  done
+
+  for cmd in $optional; do
+    command -v $cmd &>/dev/null || missing_optional+=($cmd)
+  done
+
+  if (( antidote_missing )); then
+    print -P "%F{red}%B[zshrc]%b Missing required: antidote%f"
+    print -P "%F{yellow}  git clone --depth=1 https://github.com/mattmc3/antidote.git \${ANTIDOTE_HOME:-~/.antidote}%f"
+  fi
+
+  if (( ${#missing_required} )); then
+    print -P "%F{red}%B[zshrc]%b Missing required:%f ${(j:, :)missing_required}"
+    print -P "%F{yellow}  brew install ${(j: :)missing_required}%f"
+  fi
+
+  if (( !antidote_missing && !${#missing_required} )); then
+    print -P "%F{green}All required dependencies installed%f"
+  fi
+
+  if (( ${#missing_optional} )); then
+    print -P "%F{8}[zshrc] Optional: ${(j:, :)missing_optional} (brew install ${(j: :)missing_optional})%f"
+  fi
+}

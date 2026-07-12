@@ -1,0 +1,262 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $currentCursorSettings := dict -}}
+{{- if .chezmoi.stdin -}}
+{{-   $currentCursorSettings = fromJsonc .chezmoi.stdin -}}
+{{- end -}}
+{{- $cursorFlowLicense := get $currentCursorSettings "flow-icons.licenseKey" -}}
+{
+	// ═══════════════════════════════════════════════════════════════════════════
+	// EDITOR: Visual Appearance
+	// ═══════════════════════════════════════════════════════════════════════════
+	"editor.bracketPairColorization.enabled": true,
+	"editor.cursorBlinking": "phase",
+	"editor.cursorSmoothCaretAnimation": "off",
+	"editor.cursorSurroundingLines": 8,
+	"editor.fontFamily": "\"FiraCode Nerd Font Mono\", Menlo, Monaco, 'Courier New', monospace",
+	"editor.fontLigatures": "'calt' on, 'liga' on, 'zero' on, 'ss02' on",
+	"editor.fontSize": 13.25,
+	"editor.guides.bracketPairs": true,
+	"editor.guides.bracketPairsHorizontal": "active",
+	"editor.guides.highlightActiveIndentation": true,
+	"editor.guides.indentation": true,
+	"editor.lineHeight": 0,
+	"editor.rulers": [80, 100, 120],
+	"editor.semanticHighlighting.enabled": true,
+	"editor.smoothScrolling": true,
+	"editor.stickyScroll.enabled": true,
+	"editor.tokenColorCustomizations": {
+		"textMateRules": [
+			{
+				"scope": "comment",
+				"settings": {
+					"fontStyle": "italic"
+				}
+			}
+		]
+	},
+	"editor.wordWrap": "on",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// EDITOR: Behavior
+	// ═══════════════════════════════════════════════════════════════════════════
+	"editor.accessibilitySupport": "off",
+	"editor.codeActionsOnSave": {
+		"source.fixAll.biome": "explicit",
+		"source.organizeImports.biome": "explicit",
+		"source.sortMembers": "explicit"
+	},
+	"editor.detectIndentation": false,
+	"editor.formatOnPaste": false,
+	"editor.formatOnSave": true,
+	"editor.indentSize": "tabSize",
+	"editor.inlayHints.enabled": "off",
+	"editor.inlineSuggest.enabled": true,
+	"editor.linkedEditing": true,
+	"editor.quickSuggestions": {
+		"strings": "on"
+	},
+	"editor.tabCompletion": "on",
+	"editor.tabSize": 2,
+	"files.insertFinalNewline": true,
+	"files.watcherExclude": {
+		"**/.direnv/**": true,
+		"**/.git/objects/**": true,
+		"**/.git/subtree-cache/**": true,
+		"**/.next/**": true,
+		"**/.venv/**": true,
+		"**/coverage/**": true,
+		"**/node_modules/**": true
+	},
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// WORKBENCH: Appearance
+	// ═══════════════════════════════════════════════════════════════════════════
+	"workbench.colorTheme": "Default Dark+",
+	"workbench.editor.decorations.badges": true,
+	"workbench.editor.decorations.colors": true,
+	"workbench.editor.enablePreview": false,
+	"workbench.editor.wrapTabs": true,
+	"workbench.editorAssociations": {
+		"*.svg": "default"
+	},
+	"workbench.iconTheme": "flow-dim",
+	"workbench.list.smoothScrolling": true,
+	"workbench.preferredDarkColorTheme": "Catppuccin Mocha",
+	"workbench.sideBar.location": "right",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// EXPLORER
+	// ═══════════════════════════════════════════════════════════════════════════
+	"explorer.compactFolders": true,
+	"explorer.fileNesting.enabled": true,
+	"explorer.fileNesting.expand": false,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// WINDOW
+	// ═══════════════════════════════════════════════════════════════════════════
+	"window.autoDetectColorScheme": true,
+	"window.titleBarStyle": "custom",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// TERMINAL
+	// ═══════════════════════════════════════════════════════════════════════════
+	"terminal.integrated.fontFamily": "'FiraCode Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
+	"terminal.integrated.fontLigatures.enabled": true,
+	"terminal.integrated.fontSize": 14,
+	"terminal.integrated.minimumContrastRatio": 1,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// LANGUAGE-SPECIFIC: Formatters
+	// ═══════════════════════════════════════════════════════════════════════════
+	"[css]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[javascript]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[javascriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[python]": {
+		"editor.formatOnType": true
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome",
+		"editor.formatOnSave": true
+	},
+	"[yaml]": {
+		"editor.defaultFormatter": "redhat.vscode-yaml",
+		"prettier.trailingComma": "none"
+	},
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// TYPESCRIPT / JAVASCRIPT
+	// ═══════════════════════════════════════════════════════════════════════════
+	"js/ts.referencesCodeLens.enabled": true,
+	"js/ts.tsserver.maxMemory": 8192,
+	"js/ts.tsserver.node.path": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/node",
+	"js/ts.updateImportsOnFileMove.enabled": "always",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// BIOME
+	// ═══════════════════════════════════════════════════════════════════════════
+	"biome.requireConfiguration": true,
+	"biome.suggestInstallingGlobally": false,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// GIT / GITLENS
+	// ═══════════════════════════════════════════════════════════════════════════
+	"git.autofetch": true,
+	"git.ignoreMissingGitWarning": true,
+	"gitlens.advanced.messages": {
+		"suppressGitMissingWarning": true
+	},
+	"gitlens.blame.fontFamily": "\"Atkinson Hyperlegible\", -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif",
+	"gitlens.currentLine.fontFamily": "\"Atkinson Hyperlegible\", -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif",
+	"gitlens.hovers.currentLine.over": "line",
+	"gitlens.hovers.enabled": true,
+	"gitlens.telemetry.enabled": false,
+	"gitlens.views.commitDetails.files.layout": "list",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// DIFF EDITOR
+	// ═══════════════════════════════════════════════════════════════════════════
+	"diffEditor.experimental.showMoves": true,
+	"diffEditor.ignoreTrimWhitespace": false,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// COLOR INFO EXTENSION
+	// ═══════════════════════════════════════════════════════════════════════════
+	"colorInfo.languages": [
+		{ "colors": "css", "selector": "css" },
+		{ "colors": "css", "selector": "less" },
+		{ "colors": "css", "selector": "sass" },
+		{ "colors": "css", "selector": "scss" },
+		{ "colors": "css", "selector": "typescript" },
+		{ "colors": "css", "selector": "typescriptreact" },
+		{ "colors": "css", "selector": "xml" }
+	],
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// VIBRANCY EXTENSION (disabled)
+	// ═══════════════════════════════════════════════════════════════════════════
+	// "vscode_vibrancy.enableAutoTheme": true,
+	// "vscode_vibrancy.imports": ["/path/to/file"],
+	// "vscode_vibrancy.opacity": -1,
+	// "vscode_vibrancy.refreshInterval": 33.33,
+	// "vscode_vibrancy.theme": "Default Dark",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// OTHER EXTENSIONS
+	// ═══════════════════════════════════════════════════════════════════════════
+	"cursor.cpp.disabledLanguages": ["markdown", "plaintext"],
+{{ if $cursorFlowLicense }}
+	"flow-icons.licenseKey": {{ $cursorFlowLicense | quote }},
+{{ end }}
+	"versionlens.suggestions.showOnStartup": false,
+	"RadonIDE.panelLocation": "tab",
+	"react-native-tools.showUserTips": false,
+	"rust-analyzer.inlayHints.typeHints.enable": false,
+	"symbols.hidesExplorerArrows": false,
+	"vsicons.dontShowNewVersionMessage": true,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// MARKDOWN
+	// ═══════════════════════════════════════════════════════════════════════════
+	"markdown.preview.fontFamily": "\"Atkinson Hyperlegible\", -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// JSON
+	// ═══════════════════════════════════════════════════════════════════════════
+	"json.schemaDownload.enable": true,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// SECURITY & TELEMETRY
+	// ═══════════════════════════════════════════════════════════════════════════
+	"redhat.telemetry.enabled": false,
+	"security.promptForLocalFileProtocolHandling": true,
+	"security.promptForRemoteFileProtocolHandling": true,
+	"security.workspace.trust.enabled": true,
+	"security.workspace.trust.startupPrompt": "always",
+	"security.workspace.trust.untrustedFiles": "newWindow",
+	"telemetry.feedback.enabled": false,
+	"telemetry.telemetryLevel": "off",
+	"workbench.enableExperiments": false,
+	"workbench.settings.enableNaturalLanguageSearch": false,
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// UPDATES & EXTENSIONS
+	// ═══════════════════════════════════════════════════════════════════════════
+	"extensions.autoCheckUpdates": true,
+	"extensions.autoUpdate": true,
+	"extensions.ignoreRecommendations": true,
+	"update.mode": "start",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// PERFORMANCE & SYSTEM
+	// ═══════════════════════════════════════════════════════════════════════════
+	"terminal.integrated.gpuAcceleration": "auto",
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// MISCELLANEOUS
+	// ═══════════════════════════════════════════════════════════════════════════
+	"task.quickOpen.detail": false,
+	"gitlens.ai.model": "gitkraken",
+	"gitlens.ai.gitkraken.model": "gemini:gemini-2.0-flash",
+	"editor.screenReaderAnnounceInlineSuggestion": false
+}

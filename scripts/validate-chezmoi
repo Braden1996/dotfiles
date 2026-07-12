@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+	echo "usage: $0 personal|work" >&2
+	exit 2
+}
+
+[[ $# -eq 1 ]] || usage
+profile=$1
+
+case "$profile" in
+personal)
+	work_email=""
+	work_org=""
+	work_gpg_key=""
+	;;
+work)
+	work_email="work@example.com"
+	work_org="example-work"
+	work_gpg_key="2222222222222222"
+	;;
+*) usage ;;
+esac
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null 2>&1 || {
+	echo "chezmoi is required" >&2
+	exit 1
+}
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-check.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+home_dir="$temp_root/home"
+config_file="$temp_root/chezmoi.toml"
+mkdir -p "$home_dir" "$temp_root/cache" "$temp_root/rendered" "$temp_root/xdg-config"
+chmod 700 "$home_dir"
+
+cat >"$config_file" <<EOF
+[data]
+  machineType = "$profile"
+  gitName = "Dotfiles CI"
+  personalEmail = "personal@example.com"
+  sideProjectEmail = ""
+  sideProjectGitHubRepo = ""
+  workEmail = "$work_email"
+  workGitHubOrg = "$work_org"
+  gpgKeyPersonalEmail = "1111111111111111"
+  gpgKeySideProjectEmail = ""
+  gpgKeyWorkEmail = "$work_gpg_key"
+EOF
+
+cm() {
+	HOME="$home_dir" \
+		XDG_CACHE_HOME="$temp_root/cache" \
+		XDG_CONFIG_HOME="$temp_root/xdg-config" \
+		"$chezmoi_bin" \
+		--cache "$temp_root/cache/chezmoi" \
+		--config "$config_file" \
+		--destination "$home_dir" \
+		--no-tty \
+		--persistent-state "$temp_root/chezmoi.boltdb" \
+		--refresh-externals=never \
+		--source "$repo_root" \
+		"$@"
+}
+
+template_index=0
+while IFS= read -r -d '' template; do
+	template_index=$((template_index + 1))
+	rendered="$temp_root/rendered/$template_index"
+	if [[ "$template" == "$repo_root/.chezmoi.toml.tmpl" ]]; then
+		cm execute-template \
+			--init \
+			--promptChoice "Machine type (personal/work)=$profile" \
+			--promptString "Git author name=Dotfiles CI" \
+			--promptString "Personal email address=personal@example.com" \
+			--promptString "Side-project email address (blank to skip)=" \
+			--promptString "Work email address=$work_email" \
+			--promptString "GitHub organization for work repos (blank to skip remote-based git identity switching)=$work_org" \
+			--promptString "GPG signing key ID for personal@example.com (blank if not yet generated)=1111111111111111" \
+			--promptString "GPG signing key ID for $work_email (blank if not yet generated)=$work_gpg_key" \
+			--file "$template" >"$rendered"
+	else
+		cm execute-template --file "$template" >"$rendered"
+	fi
+
+	case "$template" in
+	*.sh.tmpl)
+		bash -n "$rendered"
+		if command -v shellcheck >/dev/null 2>&1; then
+			shellcheck --shell bash --exclude SC1090,SC1091,SC2050 "$rendered"
+		fi
+		;;
+	*.json.tmpl)
+		if command -v jq >/dev/null 2>&1; then
+			sed '/^[[:space:]]*\/\//d' "$rendered" | jq --exit-status . >/dev/null
+		fi
+		if command -v biome >/dev/null 2>&1; then
+			biome format \
+				--json-parse-allow-comments=true \
+				--stdin-file-path "${template%.tmpl}" <"$rendered" >/dev/null
+		fi
+		;;
+	esac
+done < <(find "$repo_root" -type f -name '*.tmpl' -not -path "$repo_root/.git/*" -print0)
+
+cm archive --format tar >"$temp_root/target.tar"
+tar -tf "$temp_root/target.tar" >/dev/null
+cm apply --dry-run --force >/dev/null
+
+for _ in 1 2; do
+	cm apply --exclude scripts --force
+done
+
+status=$(cm status --exclude scripts)
+if [[ -n "$status" ]]; then
+	echo "second apply left destination drift for profile '$profile':" >&2
+	echo "$status" >&2
+	exit 1
+fi
+
+cm verify --exclude scripts
+
+if [[ "$profile" == work ]]; then
+	[[ -f "$home_dir/.isembard.gitconfig" ]]
+else
+	[[ ! -e "$home_dir/.isembard.gitconfig" ]]
+fi
+
+privacy_expected=(
+	"DO_NOT_TRACK=1"
+	"GH_TELEMETRY=0"
+	"GRAPHITE_DISABLE_TELEMETRY=1"
+	"HOMEBREW_NO_ANALYTICS=1"
+	"YARN_ENABLE_TELEMETRY=0"
+)
+
+assert_privacy_env() {
+	local shell_name=$1
+	local output=$2
+	local expected
+
+	for expected in "${privacy_expected[@]}"; do
+		if ! grep -Fxq -- "$expected" <<<"$output"; then
+			echo "$shell_name did not export $expected" >&2
+			exit 1
+		fi
+	done
+}
+
+# The nested shells intentionally expand HOME after env -i sets it.
+# shellcheck disable=SC2016
+bash_privacy=$(env -i HOME="$home_dir" PATH="$PATH" bash --noprofile --norc -c '. "$HOME/.profile"; env')
+assert_privacy_env Bash "$bash_privacy"
+
+if command -v zsh >/dev/null 2>&1; then
+	# shellcheck disable=SC2016
+	zsh_privacy=$(env -i HOME="$home_dir" PATH="$PATH" zsh -dfc 'source "$HOME/.config/zsh/05-privacy.zsh"; env')
+	assert_privacy_env Zsh "$zsh_privacy"
+fi
+
+if command -v fish >/dev/null 2>&1; then
+	# shellcheck disable=SC2016
+	fish_privacy=$(env -i HOME="$home_dir" PATH="$PATH" fish -c 'source "$HOME/.config/fish/conf.d/05-privacy.fish"; env')
+	assert_privacy_env Fish "$fish_privacy"
+fi
+
+for forbidden_env in HOMEBREW_NO_AUTO_UPDATE CHECKPOINT_DISABLE GH_NO_UPDATE_NOTIFIER npm_config_offline YARN_ENABLE_NETWORK; do
+	if grep -Eq "^${forbidden_env}=" <<<"$bash_privacy"; then
+		echo "forbidden update/network control is exported: $forbidden_env" >&2
+		exit 1
+	fi
+done
+
+grep -Eq '^[[:space:]]*use_versions_host_track[[:space:]]*=[[:space:]]*false[[:space:]]*$' \
+	"$home_dir/.config/mise/config.toml"
+grep -Eq '^[[:space:]]*disable_checkpoint_signature[[:space:]]*=[[:space:]]*true[[:space:]]*$' \
+	"$home_dir/.terraformrc"
+if grep -Eq '^[[:space:]]*disable_checkpoint[[:space:]]*=' "$home_dir/.terraformrc"; then
+	echo "Terraform checkpoint checks must remain enabled" >&2
+	exit 1
+fi
+
+cursor_source="$repo_root/private_Library/private_Application Support/private_Cursor/User/modify_settings.json"
+cursor_settings="$home_dir/Library/Application Support/Cursor/User/settings.json"
+if [[ ! -f "$cursor_settings" ]]; then
+	cursor_settings="$temp_root/rendered/cursor-settings.json"
+	cm execute-template --with-stdin --file "$cursor_source" </dev/null \
+		>"$cursor_settings"
+fi
+
+license_key=flow-icons.licenseKey
+license_value=SYNTHETIC-FLOW-LICENSE
+cursor_existing="$temp_root/rendered/cursor-existing.json"
+cursor_preserved="$temp_root/rendered/cursor-preserved.json"
+printf '{\n  // Existing local-only extension state.\n  "%s": "%s",\n}\n' \
+	"$license_key" "$license_value" >"$cursor_existing"
+cm execute-template --with-stdin --file "$cursor_source" \
+	<"$cursor_existing" >"$cursor_preserved"
+if ! grep -Fq -- "\"$license_key\": \"$license_value\"" "$cursor_preserved"; then
+	echo "Cursor's existing local Flow Icons license was not preserved" >&2
+	exit 1
+fi
+if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
+	echo "Cursor's license key must not be invented on a new installation" >&2
+	exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+	sed '/^[[:space:]]*\/\//d' "$cursor_settings" | jq --exit-status . >/dev/null
+fi
+if command -v biome >/dev/null 2>&1; then
+	biome format --json-parse-allow-comments=true \
+		--stdin-file-path settings.json <"$cursor_settings" >/dev/null
+fi
+for cursor_setting in \
+	'"git.autofetch": true' \
+	'"json.schemaDownload.enable": true' \
+	'"telemetry.telemetryLevel": "off"' \
+	'"workbench.enableExperiments": false' \
+	'"security.workspace.trust.enabled": true' \
+	'"security.promptForLocalFileProtocolHandling": true' \
+	'"extensions.autoCheckUpdates": true' \
+	'"extensions.autoUpdate": true' \
+	'"update.mode": "start"'; do
+	grep -Fq -- "$cursor_setting" "$cursor_settings"
+done
+
+grep -Fq 'analytics off' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+
+for bash_file in "$home_dir/.bash_profile" "$home_dir/.bashrc" "$home_dir/.profile"; do
+	[[ ! -f "$bash_file" ]] || bash -n "$bash_file"
+done
+sh -n "$home_dir/.profile"
+
+if command -v fish >/dev/null 2>&1 && [[ -d "$home_dir/.config/fish" ]]; then
+	while IFS= read -r -d '' fish_file; do
+		fish --no-execute "$fish_file"
+	done < <(find "$home_dir/.config/fish" -type f -name '*.fish' -print0)
+fi
+
+if command -v zsh >/dev/null 2>&1; then
+	for zsh_file in "$home_dir/.zshenv" "$home_dir/.zprofile" "$home_dir/.zshrc"; do
+		[[ ! -f "$zsh_file" ]] || zsh -n "$zsh_file"
+	done
+	if [[ -d "$home_dir/.config/zsh" ]]; then
+		while IFS= read -r -d '' zsh_file; do
+			zsh -n "$zsh_file"
+		done < <(find "$home_dir/.config/zsh" -type f -name '*.zsh' -print0)
+	fi
+fi
+
+if command -v starship >/dev/null 2>&1 && [[ -f "$home_dir/.config/starship.toml" ]]; then
+	STARSHIP_CONFIG="$home_dir/.config/starship.toml" starship print-config >/dev/null
+fi
+
+ghostty_bin=$(command -v ghostty || true)
+if [[ -z "$ghostty_bin" && -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]]; then
+	ghostty_bin=/Applications/Ghostty.app/Contents/MacOS/ghostty
+fi
+if [[ -n "$ghostty_bin" && -f "$home_dir/.config/ghostty/config" ]]; then
+	"$ghostty_bin" +validate-config --config-file="$home_dir/.config/ghostty/config"
+fi
+
+if command -v tmux >/dev/null 2>&1 && [[ -f "$home_dir/.tmux.conf" ]]; then
+	tmux_socket="dotfiles-check-$$-$profile"
+	HOME="$home_dir" tmux -L "$tmux_socket" -f "$home_dir/.tmux.conf" new-session -d
+	HOME="$home_dir" tmux -L "$tmux_socket" kill-server
+fi
+
+if command -v nvim >/dev/null 2>&1 && [[ -f "$home_dir/.config/nvim/init.lua" ]]; then
+	lazy_lock_before=$(cksum "$repo_root/dot_config/nvim/lazy-lock.json")
+	mise_lock_before=$(cksum "$repo_root/mise.lock")
+	mkdir -p \
+		"$temp_root/lazy-stub/lua/lazy" \
+		"$temp_root/nvim-cache" \
+		"$temp_root/nvim-data" \
+		"$temp_root/nvim-state"
+	cat >"$temp_root/lazy-stub/lua/lazy/init.lua" <<'LUA'
+return {
+  setup = function() end,
+}
+LUA
+	HOME="$home_dir" \
+		LAZY="$temp_root/lazy-stub" \
+		XDG_CACHE_HOME="$temp_root/nvim-cache" \
+		XDG_CONFIG_HOME="$home_dir/.config" \
+		XDG_DATA_HOME="$temp_root/nvim-data" \
+		XDG_STATE_HOME="$temp_root/nvim-state" \
+		nvim --headless -u "$home_dir/.config/nvim/init.lua" +qa
+	[[ "$lazy_lock_before" == "$(cksum "$repo_root/dot_config/nvim/lazy-lock.json")" ]]
+	[[ "$mise_lock_before" == "$(cksum "$repo_root/mise.lock")" ]]
+fi
+
+echo "validated chezmoi $profile profile with $($chezmoi_bin --version | head -n 1)"
