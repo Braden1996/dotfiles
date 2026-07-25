@@ -1,16 +1,17 @@
 # Homebrew Bundle installs missing dependencies only. Upgrades are explicit via
 # dotfiles-update so a normal chezmoi apply remains predictable.
 
+## Taps
 # Third-party taps are also allowlisted by the package-install hook.
 tap "withgraphite/tap"
 
-# Shell and prompt
+## Shell and prompt
 brew "antidote"
 brew "fish"
 brew "starship"
 brew "zsh"
 
-# Core CLI tools
+## Core CLI tools
 brew "bat"
 brew "chezmoi"
 brew "eza"
@@ -22,7 +23,13 @@ brew "ripgrep"
 brew "yazi"
 brew "zoxide"
 
-# Development and validation
+## Credentials
+# The CLI is needed on every machine: personal machines use it to create and
+# publish the machine keys, work machines to load them into the ssh-agent.
+# It is distributed as a cask, not a formula.
+cask "1password-cli"
+
+## Development and validation
 brew "gh"
 brew "git"
 brew "git-delta"
@@ -34,7 +41,13 @@ brew "taplo"
 brew "tmux"
 brew "withgraphite/tap/graphite"
 
-# Desktop tools
+## Desktop tools
 cask "cursor"
 cask "font-fira-code-nerd-font"
 cask "ghostty"
+{{ if ne (or (get . "machineType") "personal") "work" }}
+# Only personal machines run the desktop app. Work machines reach 1Password
+# through a service account and the CLI alone, which is what keeps their access
+# revocable from here.
+cask "1password"
+{{- end }}

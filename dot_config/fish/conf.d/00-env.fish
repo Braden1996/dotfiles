@@ -20,6 +20,8 @@ set -l preferred_paths \
     "$HOME/.bun/bin" \
     "$HOME/.cargo/bin" \
     "$HOME/.antigravity/antigravity/bin" \
+    "$HOME/.grok/bin" \
+    "$HOME/.kimi-code/bin" \
     "$HOMEBREW_PREFIX/bin" \
     "$HOMEBREW_PREFIX/sbin" \
     /usr/local/bin

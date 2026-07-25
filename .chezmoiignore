@@ -6,16 +6,15 @@ assets/**
 mise.lock
 scripts/**
 
-{{- $sideProjectEmail := or (get . "sideProjectEmail") "" -}}
-{{ if eq $sideProjectEmail "" }}
-.higher.gitconfig
-{{ end }}
-
-{{ if ne .machineType "work" }}
-.isembard.gitconfig
-{{ end }}
-
 {{ if ne .chezmoi.os "darwin" }}
 Library/**
 .config/ghostty/**
 {{ end }}
+
+{{/*
+No key material is templated. ~/.ssh/id_github_auth.pub, id_github_sign.pub and
+allowed_signers are all written at runtime by `dotfiles-keys sync` from the
+vault, which is the single source of truth for keys. Templating them would mean
+a second copy that can disagree, and a trust store that only ever knows about
+the machine it was rendered on.
+*/}}

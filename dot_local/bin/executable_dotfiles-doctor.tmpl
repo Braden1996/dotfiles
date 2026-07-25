@@ -35,10 +35,14 @@ while (( $# > 0 )); do
   shift
 done
 
-configured_personal_key={{ get . "gpgKeyPersonalEmail" | default "" | quote }}
-configured_work_key={{ get . "gpgKeyWorkEmail" | default "" | quote }}
+credential_backend={{ ternary "service-account" "desktop" (eq (get . "machineType" | default "personal") "work") | quote }}
+credential_vault={{ get . "opVault" | default "" | quote }}
+# Public keys live on disk, written from the vault by `dotfiles-keys sync`.
+recorded_auth_key="$( [[ -r "$HOME/.ssh/id_github_auth.pub" ]] && cat "$HOME/.ssh/id_github_auth.pub" || true )"
+recorded_sign_key="$( [[ -r "$HOME/.ssh/id_github_sign.pub" ]] && cat "$HOME/.ssh/id_github_sign.pub" || true )"
 personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
-work_email={{ get . "workEmail" | default "doctor@example.invalid" | quote }}
+service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
+service_account_keychain={{ .credentials.serviceAccountKeychainService | quote }}
 
 ok_count=0
 warn_count=0
@@ -95,44 +99,67 @@ check_env() {
   fi
 }
 
-check_secret_key() {
+# Comments differ between what 1Password stores and what ssh-add reports, so
+# compare the algorithm and key body only.
+key_body() {
+  awk '{ print $1 " " $2 }' <<<"$1"
+}
+
+agent_holds_key() {
+  local public_key="$1" loaded
+  [[ -n "$public_key" ]] || return 1
+  loaded="$(ssh-add -L 2>/dev/null)" || return 1
+  grep -Fq -- "$(key_body "$public_key")" <<<"$loaded"
+}
+
+check_agent_key() {
   local label="$1"
   local key="$2"
 
   if [[ -z "$key" ]]; then
-    warn "$label GPG signing key is not configured in Chezmoi data"
-  elif gpg --list-secret-keys --with-colons "$key" 2>/dev/null | grep -q '^sec:'; then
-    pass "$label GPG secret key is available: $key"
+    warn "$label public key is missing from ~/.ssh; run: dotfiles-keys sync"
+  elif agent_holds_key "$key"; then
+    pass "$label key is held by the ssh-agent"
+  elif [[ "$credential_backend" == "service-account" ]]; then
+    warn "$label key is not loaded; run: dotfiles-keys load"
   else
-    fail "$label GPG secret key is unavailable: $key"
+    warn "$label key is not offered by the agent; check the 1Password SSH agent setting"
   fi
 }
 
-sign_test_index=0
+# Sign a throwaway commit exactly the way the managed gitconfig does, so a
+# broken agent surfaces here rather than on the first real commit.
 test_signed_commit() {
-  local label="$1"
-  local key="$2"
-  local email="$3"
-  local repo commit_output
+  local key="$1"
+  local email="$2"
+  local repo commit_output allowed_signers
 
   [[ -n "$key" ]] || return 0
-  sign_test_index=$((sign_test_index + 1))
-  repo="$sign_test_root/repo-$sign_test_index"
+  agent_holds_key "$key" || return 0
+
+  repo="$sign_test_root/repo"
+  allowed_signers="$sign_test_root/allowed_signers"
+  printf '%s %s\n' "$email" "$key" > "$allowed_signers"
   mkdir -p "$repo"
   git -C "$repo" init -q
   git -C "$repo" config user.name "Dotfiles Doctor"
   git -C "$repo" config user.email "$email"
-  git -C "$repo" config user.signingkey "$key"
-  git -C "$repo" config gpg.program gpg
+  git -C "$repo" config gpg.format ssh
+  git -C "$repo" config user.signingkey "key::$key"
+  git -C "$repo" config gpg.ssh.allowedSignersFile "$allowed_signers"
   git -C "$repo" config commit.gpgsign true
   printf 'signing test\n' > "$repo/payload.txt"
   git -C "$repo" add payload.txt
 
-  commit_output="$(GPG_TTY="$(tty)" git -C "$repo" commit --no-verify -S -m "dotfiles doctor signing test" 2>&1)"
-  if [[ $? -eq 0 ]]; then
-    pass "$label disposable signed commit succeeded"
+  if commit_output="$(git -C "$repo" commit --no-verify -S -m "dotfiles doctor signing test" 2>&1)"; then
+    if commit_output="$(git -C "$repo" verify-commit HEAD 2>&1)"; then
+      pass "disposable SSH-signed commit was created and verified"
+    else
+      fail "disposable signed commit could not be verified"
+      printf '%s\n' "$commit_output" | indent
+    fi
   else
-    fail "$label disposable signed commit failed"
+    fail "disposable SSH-signed commit failed"
     printf '%s\n' "$commit_output" | indent
   fi
 }
@@ -152,28 +179,78 @@ check_command mise
 check_optional_command cursor
 check_optional_command safe-chain
 
-printf '\nGPG signing\n'
-if command -v gpg >/dev/null 2>&1; then
-  check_secret_key "personal" "$configured_personal_key"
-  check_secret_key "work" "$configured_work_key"
+printf '\nGitHub credentials\n'
+note "backend: $credential_backend, vault: ${credential_vault:-<unset>}"
+check_optional_command op
 
-  # Pinentry may legitimately prompt. Never attempt an active signing test when
-  # stdin/stdout are not attached to a user terminal (CI, pipes, editor tasks).
-  if [[ -t 0 && -t 1 ]]; then
-    if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
-      test_signed_commit "personal" "$configured_personal_key" "$personal_email"
-      if [[ "$configured_work_key" != "$configured_personal_key" ]]; then
-        test_signed_commit "work" "$configured_work_key" "$work_email"
-      fi
-      rm -rf -- "$sign_test_root"
+# Exit status 2 means the agent could not be contacted; 1 only means it is
+# running and currently holds nothing.
+ssh-add -l >/dev/null 2>&1
+if [[ $? -eq 2 ]]; then
+  fail "no ssh-agent is reachable at ${SSH_AUTH_SOCK:-<unset>}"
+else
+  pass "an ssh-agent is reachable"
+  check_agent_key "authentication" "$recorded_auth_key"
+  check_agent_key "signing" "$recorded_sign_key"
+fi
+
+# gitconfig points gpg.ssh.allowedSignersFile here, but chezmoi does not write
+# it: only the vault knows every machine's signing key, so `dotfiles-keys
+# sync-signers` owns it. Without it, verification fails for every commit.
+allowed_signers_file="$HOME/.ssh/allowed_signers"
+if [[ -s "$allowed_signers_file" ]]; then
+  trusted_keys=$(awk '{ print $2 " " $3 }' "$allowed_signers_file" | sort -u | wc -l | tr -d ' ')
+  pass "trust store lists $trusted_keys machine signing key(s)"
+elif [[ -n "$recorded_sign_key" ]]; then
+  warn "no ~/.ssh/allowed_signers; run: dotfiles-keys sync"
+fi
+
+if [[ "$credential_backend" == "service-account" ]]; then
+  # The keychain is preferred over a plaintext file: a 0600 file is readable by
+  # anything running as this user, whereas a keychain item is encrypted at rest
+  # and gated by its own access control.
+  if command -v security >/dev/null 2>&1 &&
+    security find-generic-password -s "$service_account_keychain" -a "$USER" >/dev/null 2>&1; then
+    pass "service account token is in the login keychain"
+    if [[ -e "$service_account_token_file" ]]; then
+      warn "a plaintext token also exists at $service_account_token_file; delete it"
+    fi
+  elif [[ -r "$service_account_token_file" ]]; then
+    # GNU first: BSD stat rejects -c and prints nothing, while GNU stat reads
+    # -f as --file-system and prints a filesystem report before failing.
+    token_mode="$(stat -c '%a' "$service_account_token_file" 2>/dev/null || stat -f '%OLp' "$service_account_token_file" 2>/dev/null)"
+    if [[ "$token_mode" == "600" ]]; then
+      warn "service account token is a plaintext file; prefer: dotfiles-keys store-token"
     else
-      fail "could not create a disposable directory for signed-commit checks"
+      fail "service account token mode is ${token_mode:-unknown}; expected 0600"
     fi
   else
-    warn "disposable signed-commit test skipped because no interactive TTY is attached"
+    fail "no service account token found; run: dotfiles-keys store-token"
+  fi
+fi
+
+# The 1Password agent can prompt for biometric consent, so only sign actively
+# when stdin/stdout are attached to a user terminal (CI, pipes, editor tasks).
+if [[ -t 0 && -t 1 ]]; then
+  if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
+    test_signed_commit "$recorded_sign_key" "$personal_email"
+    rm -rf -- "$sign_test_root"
+  else
+    fail "could not create a disposable directory for signed-commit checks"
   fi
 else
-  fail "gpg is unavailable; signing keys could not be checked"
+  warn "disposable signed-commit test skipped because no interactive TTY is attached"
+fi
+
+if command -v gpg >/dev/null 2>&1 && gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec:'; then
+  if [[ -z "$recorded_sign_key" ]]; then
+    # This machine used to sign with GPG and now signs with nothing. Say so
+    # loudly: unsigned commits are easy to not notice until a branch is pushed.
+    warn "commit signing is currently OFF: GPG keys exist but Git no longer uses them, and no SSH signing key is recorded"
+    note "Fix with: dotfiles-keys generate && dotfiles-keys publish && dotfiles-keys sync"
+  else
+    note "GPG secret keys are still present but no longer wired into Git; commit signing uses SSH."
+  fi
 fi
 
 printf '\nChezmoi\n'
@@ -209,8 +286,7 @@ brewfile="$HOME/.config/homebrew/Brewfile"
 if [[ "$(uname -s)" != "Darwin" ]]; then
   pass "Homebrew provisioning is intentionally skipped off macOS"
 elif command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
-  brew_check="$(brew bundle check --file="$brewfile" --no-upgrade --verbose 2>&1)"
-  if [[ $? -eq 0 ]]; then
+  if brew_check="$(brew bundle check --file="$brewfile" --no-upgrade --verbose 2>&1)"; then
     pass "all managed Homebrew dependencies are installed"
   else
     fail "managed Homebrew dependencies are missing"
@@ -230,8 +306,7 @@ fi
 
 printf '\nmise\n'
 if command -v mise >/dev/null 2>&1; then
-  mise_missing="$(mise ls --global --missing --no-header 2>&1)"
-  if [[ $? -ne 0 ]]; then
+  if ! mise_missing="$(mise ls --global --missing --no-header 2>&1)"; then
     fail "mise could not inspect global tools"
     printf '%s\n' "$mise_missing" | indent
   elif [[ -n "$mise_missing" ]]; then
@@ -360,8 +435,7 @@ fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   if [[ -n "$ghostty_bin" && -r "$ghostty_config" ]]; then
-    ghostty_validation="$("$ghostty_bin" +validate-config --config-file="$ghostty_config" 2>&1)"
-    if [[ $? -eq 0 ]]; then
+    if ghostty_validation="$("$ghostty_bin" +validate-config --config-file="$ghostty_config" 2>&1)"; then
       pass "Ghostty configuration validates"
     else
       fail "Ghostty configuration is invalid"

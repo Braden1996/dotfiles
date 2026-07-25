@@ -33,6 +33,14 @@ run = [
   "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/validate-chezmoi work",
 ]
 
+[tasks.docs]
+description = "Regenerate the README inventory from its sources of truth"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/generate-docs"
+
+[tasks."check:docs"]
+description = "Fail if the README inventory no longer matches what is installed"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/generate-docs --check"
+
 [tasks."check:lua"]
 description = "Check Neovim formatting and Lua diagnostics"
 run = [
@@ -43,8 +51,8 @@ run = [
 [tasks."check:scripts"]
 description = "Lint repository validation scripts"
 run = [
-  "shellcheck scripts/validate-chezmoi",
-  "shfmt --diff --language-dialect bash scripts/validate-chezmoi",
+  "shellcheck scripts/validate-chezmoi scripts/generate-docs",
+  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs",
 ]
 
 [tasks."check:secrets"]
@@ -56,7 +64,7 @@ run = [
 
 [tasks."check:static"]
 description = "Run fast, platform-independent checks"
-depends = ["check:actions", "check:data", "check:lua", "check:scripts", "check:secrets"]
+depends = ["check:actions", "check:data", "check:docs", "check:lua", "check:scripts", "check:secrets"]
 
 [tasks.check]
 description = "Run the complete local validation suite"

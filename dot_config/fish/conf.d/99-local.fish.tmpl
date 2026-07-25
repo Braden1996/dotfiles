@@ -2,8 +2,10 @@
 # Local Overrides & External Tools
 # =============================================================================
 
-# Optional secret-manager integration can be added here later.
-# set -gx NGROK_AUTHTOKEN (op read 'op://Private/ngrok/credential')
+# 1Password is wired up already; see `dotfiles-keys`. To pull another secret,
+# resolve it on demand rather than at shell startup, and note that a work
+# machine's service account cannot read Private vaults -- only the shared one.
+# set -gx NGROK_AUTHTOKEN (op read "op://$opVault/ngrok/credential")
 # Optional: set a default Nx workspace if you want `nx` to work outside a repo.
 # set -gx BRADEN_NX_DEFAULT_WORKSPACE "$HOME/path/to/your/workspace"
 set -gx HIGHER_DEVELOPER_NAME braden

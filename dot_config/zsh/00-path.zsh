@@ -16,6 +16,8 @@ for __braden_path_dir in \
   "$HOME/.bun/bin" \
   "$HOME/.cargo/bin" \
   "$HOME/.antigravity/antigravity/bin" \
+  "$HOME/.grok/bin" \
+  "$HOME/.kimi-code/bin" \
   "$__braden_homebrew_prefix/bin" \
   "$__braden_homebrew_prefix/sbin" \
   /usr/local/bin

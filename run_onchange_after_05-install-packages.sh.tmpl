@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Brewfile source hash: {{ include "dot_config/homebrew/Brewfile" | sha256sum }}
+# Hash the rendered Brewfile, not the template: the package set now differs by
+# profile, and hashing the source would miss a machine changing profile.
+# Brewfile hash: {{ includeTemplate "dot_config/homebrew/Brewfile.tmpl" . | sha256sum }}
 if [[ "{{ .chezmoi.os }}" != "darwin" ]]; then
   echo "Homebrew dependency installation is macOS-only; skipping."
   exit 0

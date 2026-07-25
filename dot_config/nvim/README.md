@@ -7,6 +7,7 @@ The active customizations are deliberately small:
 
 - `lua/plugins/neo-tree.lua` adds a debounced, scrollable file preview.
 - `lua/plugins/project_config.lua` loads trusted `.nvim.lua` files from Git roots.
+- `lua/plugins/minimap.lua` wires codewindow.nvim to `<Leader>um` / `<Leader>uM`.
 - `lua/lazy_setup.lua` contains the AstroNvim and lazy.nvim baseline.
 
 After applying the dotfiles, start Neovim once and let lazy.nvim install the

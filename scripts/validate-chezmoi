@@ -10,19 +10,20 @@ usage() {
 [[ $# -eq 1 ]] || usage
 profile=$1
 
+# Identities are no longer a profile concern: they come from the vault at
+# runtime, so the two profiles now differ only in credential backend.
 case "$profile" in
-personal)
-	work_email=""
-	work_org=""
-	work_gpg_key=""
-	;;
-work)
-	work_email="work@example.com"
-	work_org="example-work"
-	work_gpg_key="2222222222222222"
-	;;
+personal | work) ;;
 *) usage ;;
 esac
+
+# Synthetic public keys with discarded private halves. They exercise the
+# populated signing path; a blank pair would only ever test the bootstrap
+# branch, which is the one that renders nothing.
+ci_auth_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHcoqwYrh8jsWTbblsbqGGftKsGiL4IwL3wTpd3Ldz dotfiles-ci-auth"
+ci_sign_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFFtrgK1tGmyMelb3q2IwYV7GYJUZpvYEbZxQv0ReNjR dotfiles-ci-sign"
+ci_vault="Dotfiles CI Vault"
+ci_machine_name="ci-$profile"
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
@@ -39,18 +40,26 @@ config_file="$temp_root/chezmoi.toml"
 mkdir -p "$home_dir" "$temp_root/cache" "$temp_root/rendered" "$temp_root/xdg-config"
 chmod 700 "$home_dir"
 
+# Seed a pre-existing on-disk key. Any machine that did SSH before adopting
+# these dotfiles has one, and it is the branch that decides whether access can
+# outlive a revoked service account, so CI must actually render it.
+mkdir -p "$home_dir/.ssh"
+printf 'placeholder, never parsed\n' >"$home_dir/.ssh/id_ed25519"
+chmod 600 "$home_dir/.ssh/id_ed25519"
+
+# The machine public keys are written at runtime by `dotfiles-keys sync`, not by
+# chezmoi, so seed them the way that command would. Templates key off their
+# presence, which is what makes the fully-configured branch render here.
+printf '%s\n' "$ci_auth_key" >"$home_dir/.ssh/id_github_auth.pub"
+printf '%s\n' "$ci_sign_key" >"$home_dir/.ssh/id_github_sign.pub"
+
 cat >"$config_file" <<EOF
 [data]
   machineType = "$profile"
+  machineName = "$ci_machine_name"
   gitName = "Dotfiles CI"
   personalEmail = "personal@example.com"
-  sideProjectEmail = ""
-  sideProjectGitHubRepo = ""
-  workEmail = "$work_email"
-  workGitHubOrg = "$work_org"
-  gpgKeyPersonalEmail = "1111111111111111"
-  gpgKeySideProjectEmail = ""
-  gpgKeyWorkEmail = "$work_gpg_key"
+  opVault = "$ci_vault"
 EOF
 
 cm() {
@@ -76,25 +85,26 @@ while IFS= read -r -d '' template; do
 		cm execute-template \
 			--init \
 			--promptChoice "Machine type (personal/work)=$profile" \
+			--promptString "Short name for this machine, used to scope its GitHub keys=$ci_machine_name" \
 			--promptString "Git author name=Dotfiles CI" \
 			--promptString "Personal email address=personal@example.com" \
-			--promptString "Side-project email address (blank to skip)=" \
-			--promptString "Work email address=$work_email" \
-			--promptString "GitHub organization for work repos (blank to skip remote-based git identity switching)=$work_org" \
-			--promptString "GPG signing key ID for personal@example.com (blank if not yet generated)=1111111111111111" \
-			--promptString "GPG signing key ID for $work_email (blank if not yet generated)=$work_gpg_key" \
+			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
 			--file "$template" >"$rendered"
 	else
 		cm execute-template --file "$template" >"$rendered"
 	fi
 
-	case "$template" in
-	*.sh.tmpl)
+	# Lint by rendered content, not by source filename: the doctor and the
+	# credential helper are Bash but are not named *.sh.tmpl, and were
+	# previously rendered without ever being checked.
+	if [[ "$(head -n 1 "$rendered")" == "#!"*[Bb]"ash" ]]; then
 		bash -n "$rendered"
 		if command -v shellcheck >/dev/null 2>&1; then
 			shellcheck --shell bash --exclude SC1090,SC1091,SC2050 "$rendered"
 		fi
-		;;
+	fi
+
+	case "$template" in
 	*.json.tmpl)
 		if command -v jq >/dev/null 2>&1; then
 			sed '/^[[:space:]]*\/\//d' "$rendered" | jq --exit-status . >/dev/null
@@ -125,10 +135,216 @@ fi
 
 cm verify --exclude scripts
 
-if [[ "$profile" == work ]]; then
-	[[ -f "$home_dir/.isembard.gitconfig" ]]
-else
-	[[ ! -e "$home_dir/.isembard.gitconfig" ]]
+# Identities come from the vault at runtime, so chezmoi must emit no identity
+# routing of its own: a templated includeIf could only ever encode the one
+# identity the rendering machine happened to know about.
+if grep -q 'includeIf' "$home_dir/.gitconfig"; then
+	echo "gitconfig must not template includeIf rules; identities are vault-driven" >&2
+	grep -n 'includeIf' "$home_dir/.gitconfig" >&2
+	exit 1
+fi
+grep -Fq 'path = ~/.config/git/identities.gitconfig' "$home_dir/.gitconfig"
+if [[ -e "$home_dir/.higher.gitconfig" || -e "$home_dir/.isembard.gitconfig" ]]; then
+	echo "per-identity gitconfig files must no longer be managed" >&2
+	exit 1
+fi
+if cm managed | grep -Eq 'config/git/identities'; then
+	echo "git identities must not be managed by chezmoi" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+# GNU first: BSD stat rejects -c outright and prints nothing, but GNU stat
+# treats -f as --file-system and prints a filesystem report to stdout while
+# exiting non-zero, so a BSD-first probe captures that junk plus the fallback.
+file_mode() {
+	stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null
+}
+
+ssh_config="$home_dir/.ssh/config"
+[[ -f "$ssh_config" ]]
+[[ "$(file_mode "$home_dir/.ssh")" == "700" ]]
+[[ "$(file_mode "$ssh_config")" == "600" ]]
+
+grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
+
+# Neither profile may pin an agent socket. The 1Password SSH agent asks approval
+# per client, which no unattended process can answer, so pinning it would stop
+# agent harnesses and CI from pushing or signing at all.
+if grep -Fq 'IdentityAgent' "$ssh_config"; then
+	echo "no profile may pin an agent socket: it would gate unattended pushes" >&2
+	exit 1
+fi
+
+# Seeded above the way `dotfiles-keys sync` would write it. chezmoi must not
+# own it: templating key material would create a second copy that can disagree
+# with the vault.
+grep -Fxq "$ci_auth_key" "$home_dir/.ssh/id_github_auth.pub"
+grep -Fxq "$ci_sign_key" "$home_dir/.ssh/id_github_sign.pub"
+if cm managed | grep -Eq 'id_github_(auth|sign)\.pub|allowed_signers'; then
+	echo "public key material must not be managed by chezmoi" >&2
+	exit 1
+fi
+
+# allowed_signers must list every machine's signing key, and only the vault
+# knows how many machines exist, so it is built at runtime by
+# `dotfiles-keys sync-signers` rather than templated. Assert chezmoi does NOT
+# write it -- a templated one would silently distrust the other machines.
+if [[ -e "$home_dir/.ssh/allowed_signers" ]]; then
+	echo "allowed_signers must not be managed by chezmoi: it would only ever" >&2
+	echo "contain this machine's key, so commits signed elsewhere would fail" >&2
+	exit 1
+fi
+
+grep -Eq '^[[:space:]]*format = ssh$' "$home_dir/.gitconfig"
+grep -Fq 'signingkey = ~/.ssh/id_github_sign.pub' "$home_dir/.gitconfig"
+grep -Fq 'allowedSignersFile = ~/.ssh/allowed_signers' "$home_dir/.gitconfig"
+if grep -Eq '^[[:space:]]*program = gpg$' "$home_dir/.gitconfig"; then
+	echo "gitconfig still routes signing through gpg" >&2
+	exit 1
+fi
+
+# A stray on-disk private key survives revoking the service account, so a
+# service-account machine must never be told to use one. The disposable home
+# was seeded with an id_ed25519 before apply precisely so this branch renders.
+if [[ "$profile" == personal ]]; then
+	grep -Fq 'IdentityFile ~/.ssh/id_ed25519' "$ssh_config"
+elif grep -Fq 'id_ed25519' "$ssh_config"; then
+	echo "work profile must not reference a durable on-disk key: revoking the" >&2
+	echo "service account cannot reach it, so access would outlive revocation" >&2
+	exit 1
+fi
+
+# The whole point of the credential design is that no private key is ever
+# written to a managed target. Two complementary assertions: no target may
+# contain key material, and ~/.ssh may contain nothing beyond the public
+# artefacts we intend, so a future template cannot quietly add a key file.
+if grep -rlEi 'BEGIN [A-Z ]*PRIVATE KEY|OP_SERVICE_ACCOUNT_TOKEN=[A-Za-z0-9]' "$home_dir" 2>/dev/null | grep -q .; then
+	echo "private key material or a literal service account token was written to the target" >&2
+	grep -rlEi 'BEGIN [A-Z ]*PRIVATE KEY|OP_SERVICE_ACCOUNT_TOKEN=[A-Za-z0-9]' "$home_dir" >&2
+	exit 1
+fi
+
+unexpected_ssh=$(find "$home_dir/.ssh" -type f \
+	! -name config ! -name 'id_ed25519' \
+	! -name 'id_github_auth.pub' ! -name 'id_github_sign.pub' -print)
+if [[ -n "$unexpected_ssh" ]]; then
+	echo "apply wrote unexpected files into ~/.ssh:" >&2
+	echo "$unexpected_ssh" >&2
+	exit 1
+fi
+
+# Keys must be scoped to this machine, otherwise revoking one machine on GitHub
+# revokes every machine and signatures cannot be attributed.
+keys_command="$home_dir/.local/bin/dotfiles-keys"
+[[ -x "$keys_command" ]]
+grep -Fq "GitHub Machine Auth ($ci_machine_name)" "$keys_command"
+grep -Fq "GitHub Machine Sign ($ci_machine_name)" "$keys_command"
+grep -Fq 'sync-signers' "$keys_command"
+
+# Prove the generated config actually parses, rather than only that it contains
+# the right substrings. ssh -G fails on an unknown keyword or bad syntax.
+if command -v ssh >/dev/null 2>&1; then
+	if ! ssh_parse=$(ssh -F "$ssh_config" -G github.com 2>&1); then
+		echo "the generated ~/.ssh/config does not parse:" >&2
+		echo "$ssh_parse" >&2
+		exit 1
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# Bootstrap state
+# ---------------------------------------------------------------------------
+# A fresh machine has no recorded keys. That path renders differently from the
+# populated one above and is what every new machine hits first, so assert it
+# degrades cleanly instead of emitting half-configured signing.
+
+bootstrap_config="$temp_root/chezmoi-bootstrap.toml"
+sed -e "s|^  opVault = .*|  opVault = \"\"|" "$config_file" >"$bootstrap_config"
+
+# A fresh machine has no key files, so point the render at an empty destination.
+# The templates key off those files existing, which is exactly what makes the
+# bootstrap branch render.
+bootstrap_home="$temp_root/bootstrap-home"
+mkdir -p "$bootstrap_home"
+
+bootstrap_render() {
+	HOME="$bootstrap_home" \
+		XDG_CACHE_HOME="$temp_root/cache" \
+		XDG_CONFIG_HOME="$temp_root/xdg-config" \
+		"$chezmoi_bin" execute-template \
+		--cache "$temp_root/cache/chezmoi" \
+		--config "$bootstrap_config" \
+		--destination "$bootstrap_home" \
+		--no-tty \
+		--persistent-state "$temp_root/chezmoi.boltdb" \
+		--source "$repo_root" \
+		--file "$1"
+}
+
+bootstrap_gitconfig=$(bootstrap_render dot_gitconfig.tmpl)
+if grep -Eq 'format = ssh|signingkey|gpgsign' <<<"$bootstrap_gitconfig"; then
+	echo "bootstrap gitconfig configures signing before a key exists:" >&2
+	echo "$bootstrap_gitconfig" >&2
+	exit 1
+fi
+
+bootstrap_ssh=$(bootstrap_render private_dot_ssh/private_config.tmpl)
+if grep -Fq 'id_github_auth.pub' <<<"$bootstrap_ssh"; then
+	echo "bootstrap ssh config points at a public key file that is not written yet" >&2
+	exit 1
+fi
+if grep -Fq 'IdentitiesOnly yes' <<<"$bootstrap_ssh"; then
+	echo "bootstrap ssh config restricts identities with none configured, which" >&2
+	echo "would lock the machine out of github before any key is recorded" >&2
+	exit 1
+fi
+
+# The credential helper must stay runnable before anything is configured.
+bootstrap_render dot_local/bin/executable_dotfiles-keys.tmpl >"$temp_root/keys-bootstrap"
+bash -n "$temp_root/keys-bootstrap"
+
+brewfile="$home_dir/.config/homebrew/Brewfile"
+
+# `brew` and `cask` are not interchangeable: declaring a cask as a formula
+# makes `brew bundle` fail on every fresh machine, and nothing else here would
+# notice because CI never installs packages. One batched lookup per kind.
+if command -v brew >/dev/null 2>&1; then
+	# Read into arrays the long way: macOS ships bash 3.2, which has no mapfile.
+	declared_formulae=()
+	declared_casks=()
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] && declared_formulae+=("$entry")
+	done < <(sed -nE 's/^brew "([^"]+)".*/\1/p' "$brewfile")
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] && declared_casks+=("$entry")
+	done < <(sed -nE 's/^cask "([^"]+)".*/\1/p' "$brewfile")
+
+	if ((${#declared_formulae[@]} > 0)) && ! brew info --formula "${declared_formulae[@]}" >/dev/null 2>&1; then
+		echo "a Brewfile 'brew' entry is not a formula (a cask declared as a formula?):" >&2
+		for entry in "${declared_formulae[@]}"; do
+			brew info --formula "$entry" >/dev/null 2>&1 || echo "  brew \"$entry\"" >&2
+		done
+		exit 1
+	fi
+	if ((${#declared_casks[@]} > 0)) && ! brew info --cask "${declared_casks[@]}" >/dev/null 2>&1; then
+		echo "a Brewfile 'cask' entry is not a cask:" >&2
+		for entry in "${declared_casks[@]}"; do
+			brew info --cask "$entry" >/dev/null 2>&1 || echo "  cask \"$entry\"" >&2
+		done
+		exit 1
+	fi
+fi
+
+grep -Eq '^cask "1password-cli"$' "$brewfile"
+if [[ "$profile" == personal ]]; then
+	grep -Eq '^cask "1password"$' "$brewfile"
+elif grep -Eq '^cask "1password"$' "$brewfile"; then
+	echo "work profile must not install the 1Password desktop app" >&2
+	exit 1
 fi
 
 privacy_expected=(

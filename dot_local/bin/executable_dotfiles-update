@@ -147,6 +147,17 @@ fi
 echo "Applying managed dotfiles and pinned externals..."
 chezmoi apply
 
+# Git identities and the signer trust store live in 1Password, so `chezmoi
+# apply` alone cannot see a newly added identity. Refresh them here, but never
+# fail the update over it: a locked vault or an offline machine is a normal
+# state and the rest of the update is still worth completing.
+if command -v dotfiles-keys >/dev/null 2>&1; then
+  echo "Refreshing git identities and the signer trust store..."
+  if ! dotfiles-keys sync; then
+    echo "Could not refresh from 1Password; run 'dotfiles-keys sync' when it is reachable." >&2
+  fi
+fi
+
 if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
   export HOMEBREW_NO_ANALYTICS=1
   export HOMEBREW_REQUIRE_TAP_TRUST=1

@@ -1,0 +1,52 @@
+{{- /*
+Derive the backend from machineType at render time rather than reading a
+persisted `credentialBackend`. A key that lives in the machine-local config
+only exists after `chezmoi init`, so a work machine that pulls this change and
+runs a plain `chezmoi apply` would otherwise render as a personal one -- the
+unsafe direction for exactly the profile this design protects.
+*/ -}}
+{{- $backend := ternary "service-account" "desktop" (eq (or (get . "machineType") "personal") "work") -}}
+{{- $authKey := joinPath .chezmoi.destDir ".ssh/id_github_auth.pub" -}}
+{{- $localKey := joinPath .chezmoi.destDir ".ssh/id_ed25519" -}}
+# =============================================================================
+# SSH Configuration
+# =============================================================================
+# Managed by chezmoi. Private keys are never written here or anywhere else on
+# disk: an agent holds them, and this file only ever names public halves.
+#
+# The public key is written by `dotfiles-keys sync` from the vault, not
+# templated from chezmoi data. Key material has exactly one source of truth.
+#
+# credentialBackend = {{ $backend }}
+#
+# Both profiles use the OS ssh-agent, filled by `dotfiles-keys load` from
+# 1Password. The 1Password SSH agent is deliberately NOT used: it asks approval
+# per client, which no unattended process can answer, so it would block agent
+# harnesses and CI from pushing or signing. 1Password is the source of truth
+# for the key, not a gate on using it.
+
+Host github.com
+  HostName github.com
+  User git
+{{- if stat $authKey }}
+  # Public half only. The agent holds the private key and performs the signature.
+  IdentityFile ~/.ssh/id_github_auth.pub
+  # Only restrict identities once one is actually configured, otherwise this
+  # would offer nothing at all before `dotfiles-keys sync` has run.
+  IdentitiesOnly yes
+{{- end }}
+{{- if and (eq $backend "desktop") (stat $localKey) }}
+  # Pre-existing machine-local key on a personal machine, kept so this machine
+  # keeps working. Deliberately NOT emitted on a service-account machine: an
+  # on-disk key survives revoking the service account, which would silently
+  # undo the one property this whole arrangement exists to provide.
+  IdentityFile ~/.ssh/id_ed25519
+  AddKeysToAgent yes
+{{- if eq .chezmoi.os "darwin" }}
+  UseKeychain yes
+{{- end }}
+{{- end }}
+
+Host *
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
