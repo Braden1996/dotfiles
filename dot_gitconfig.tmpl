@@ -15,7 +15,7 @@ never has to reach for 1Password. `dotfiles-keys sync` writes the file.
     stash-unstaged = stash --keep-index -u
 [user]
 	name = {{ .gitName | quote }}
-	email = {{ .personalEmail | quote }}
+	email = {{ .defaultEmail | quote }}
 {{- if stat $signingKeyFile }}
 	signingkey = ~/.ssh/id_github_sign.pub
 {{- end }}

@@ -7,14 +7,19 @@ drops an identity and its conditional gitconfig include.
 */}}
 {{- $machineType := promptChoiceOnce . "machineType" "Machine type (personal/work)" (list "personal" "work") (or (get . "machineType") "personal") -}}
 {{- $gitName := promptStringOnce . "gitName" "Git author name" (or (get . "gitName") "") -}}
-{{- $personalEmail := promptStringOnce . "personalEmail" "Personal email address" (or (get . "personalEmail") "") -}}
+{{/*
+The email used when no identity's scope matches -- not necessarily a personal
+address. On a work machine this should be the work email, so an unscoped repo
+commits under the safer default rather than a personal one.
+*/}}
+{{- $defaultEmail := promptStringOnce . "defaultEmail" "Default email address (used when no identity scope matches)" (or (get . "defaultEmail") "") -}}
 
 {{/*
 Additional git identities are NOT prompted for and are NOT stored here. They
 live in 1Password, one item each, in the vault this machine is configured for,
 and `dotfiles-keys sync` writes them to ~/.config/git. A fixed slot per identity
 could only ever hold one of each, and machine-local data would put a work email
-on a personal machine. personalEmail below is the default when none matches.
+on a personal machine. defaultEmail below is the default when none matches.
 */}}
 
 {{/*
@@ -54,7 +59,9 @@ must use the vault shared with the service account, because that is the only
 thing it can read -- and putting personal keys there too would let a leaked
 service account token read them.
 
-An ID works as well as a name here, and avoids trouble with special characters.
+Either a name or an ID works: dotfiles-keys resolves the name via `op vault get`
+before ever building a secret reference, so characters like `<>` that a
+reference would reject (verified against op 2.35.0) cause no trouble here.
 */}}
 {{- $opVault := promptStringOnce . "opVault" "1Password vault for this machine's GitHub keys (name or ID)" (or (get . "opVault") "") -}}
 
@@ -70,6 +77,6 @@ Ignored on personal machines, which authenticate through the desktop app.
   machineType = {{ $machineType | quote }}
   machineName = {{ $machineName | quote }}
   gitName = {{ $gitName | quote }}
-  personalEmail = {{ $personalEmail | quote }}
+  defaultEmail = {{ $defaultEmail | quote }}
   opVault = {{ $opVault | quote }}
   opTokenKeychainService = {{ $opTokenKeychainService | quote }}

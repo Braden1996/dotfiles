@@ -58,7 +58,7 @@ cat >"$config_file" <<EOF
   machineType = "$profile"
   machineName = "$ci_machine_name"
   gitName = "Dotfiles CI"
-  personalEmail = "personal@example.com"
+  defaultEmail = "personal@example.com"
   opVault = "$ci_vault"
   opTokenKeychainService = "dotfiles-ci-token"
 EOF
@@ -88,7 +88,7 @@ while IFS= read -r -d '' template; do
 			--promptChoice "Machine type (personal/work)=$profile" \
 			--promptString "Short name for this machine, used to scope its GitHub keys=$ci_machine_name" \
 			--promptString "Git author name=Dotfiles CI" \
-			--promptString "Personal email address=personal@example.com" \
+			--promptString "Default email address (used when no identity scope matches)=personal@example.com" \
 			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
 			--promptString "Keychain service name holding the 1Password service account token (work machines)=dotfiles-ci-token" \
 			--file "$template" >"$rendered"

@@ -332,7 +332,7 @@ Prompted once and stored only in the machine-local chezmoi config.
 | --- | --- |
 | `machineType` | Machine type (personal/work) |
 | `gitName` | Git author name |
-| `personalEmail` | Personal email address |
+| `defaultEmail` | Default email address (used when no identity scope matches) |
 | `machineName` | Short name for this machine, used to scope its GitHub keys |
 | `opVault` | 1Password vault for this machine's GitHub keys (name or ID) |
 | `opTokenKeychainService` | Keychain service name holding the 1Password service account token (work machines) |
