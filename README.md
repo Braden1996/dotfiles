@@ -81,7 +81,7 @@ current values, so enter keeps them. Git doesn't sign until step 5 completes.
 ## What's managed
 
 - **Shells** — zsh + fish, pinned plugins, Starship, fzf, zoxide
-- **Editors** — Cursor settings and extensions, AstroNvim v5 with a locked plugin graph
+- **Editors** — Cursor and Zed settings, Flow Icons for Zed, AstroNvim v5 with a locked plugin graph
 - **Terminal** — Ghostty, tmux with checksum-pinned plugins
 - **Git** — SSH commit signing, one include for vault-driven identities, Graphite aliases
 - **SSH** — `~/.ssh/config` per profile
@@ -239,6 +239,7 @@ Fetched at apply time and verified against a recorded SHA-256.
 - `.tmux/plugins/tpm` — https://codeload.github.com/tmux-plugins/tpm/tar.gz/e261deb1b47614eed3400089ce7197dc68acc4eb
 - `.tmux/plugins/tmux-sensible` — https://codeload.github.com/tmux-plugins/tmux-sensible/tar.gz/25cb91f42d020f675bb0a2ce3fbd3a5d96119efa
 - `.tmux/plugins/tmux` — https://codeload.github.com/dracula/tmux/tar.gz/a4612670d77c8546690dc79d23eae591c6dfa8d3
+- `.local/share/chezmoi-externals/flow-icons-zed` — https://github.com/BenjaminHalko/flow-icons-zed.git
 
 <!-- /generated:externals -->
 
@@ -250,6 +251,7 @@ Fetched at apply time and verified against a recorded SHA-256.
 
 These execute on your machine. Read them before applying on a host you do not control.
 
+- `run_after_30-update-flow-icons.sh` (always)
 - `99-setup-reminders.sh` (once)
 - `00-install-homebrew.sh` (once)
 - `05-install-packages.sh` (on change)
@@ -555,6 +557,9 @@ keep the expiry short.
 - Telemetry opt-outs are listed under [Privacy environment](#privacy-environment); the
   provisioning hook also persists the ones that are CLI settings rather than env vars.
 - Terraform keeps security bulletins, drops the anonymous checkpoint signature.
+- Zed's Flow Icons premium license stays in the macOS login Keychain. The first interactive
+  apply explains the upstream network disclosure and asks for one-time consent; neither the
+  license nor generated premium assets are written to this repository.
 - Update and security checks are **not** treated as telemetry — disabling them would hide
   security notices.
 - Shell history stays local: prefix a command with a space, or use `fish --private`.
@@ -583,7 +588,7 @@ mise run check
 .chezmoiexternal.toml  # checksum-pinned externals
 .chezmoiignore         # repo-only and platform exclusions
 .chezmoiremove         # files retired from source
-dot_config/            # fish, zsh, nvim, ghostty, cursor, mise, homebrew
+dot_config/            # fish, zsh, nvim, ghostty, cursor, zed, mise, homebrew
 private_dot_ssh/       # ssh config (public material only)
 dot_local/bin/         # dotfiles-keys, dotfiles-doctor, dotfiles-update
 run_*                  # guarded bootstrap and apply hooks

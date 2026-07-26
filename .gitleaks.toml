@@ -9,3 +9,10 @@ description = "Cursor Flow Icons license key"
 regex = '''(?i)flow-icons\.licenseKey["']?\s*[:=]\s*["']([^"'{}\r\n]{8,})["']'''
 secretGroup = 1
 keywords = ["flow-icons.licenseKey"]
+
+[[rules]]
+id = "flow-icons-license-token"
+description = "Flow Icons premium license token"
+regex = '''\b(FLOW-(?:[A-Z0-9]{6}-){3}[A-Z0-9]{6})\b'''
+secretGroup = 1
+keywords = ["FLOW-"]
