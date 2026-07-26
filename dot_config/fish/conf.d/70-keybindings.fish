@@ -3,7 +3,7 @@
 # =============================================================================
 
 function __braden_tab_or_yazi
-    if test -z (string trim -- (commandline))
+    if test -z (string trim -- (commandline)); and command -q yazi
         yazi_choose
     else
         commandline -f complete
@@ -77,11 +77,13 @@ function __braden_down_or_history_or_collapse_selection
     end
 end
 
-if status is-interactive
+if status is-interactive; and isatty stdin; and isatty stdout
     bind \r __braden_magic_enter
     bind \e\e __braden_toggle_sudo
     bind \t __braden_tab_or_yazi
-    bind \cy yazi_choose
+    if command -q yazi
+        bind \cy yazi_choose
+    end
     bind super-c fish_clipboard_copy
     bind left '__braden_move_or_collapse_selection start backward-char'
     bind right '__braden_move_or_collapse_selection end forward-char'

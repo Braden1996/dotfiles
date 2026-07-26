@@ -1,0 +1,3 @@
+# Keep Terraform's critical security and version checks, but omit the anonymous
+# Checkpoint signature used to de-duplicate notices.
+disable_checkpoint_signature = true

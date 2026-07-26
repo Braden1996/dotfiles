@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ "{{ .chezmoi.os }}" != "darwin" ]]; then
+  echo "Homebrew bootstrap is macOS-only; skipping."
+  exit 0
+fi
+
+# Opt out before the installer or the first brew command can emit analytics.
+export HOMEBREW_NO_ANALYTICS=1
+
+find_brew() {
+  if command -v brew >/dev/null 2>&1; then
+    command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then
+    printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    printf '%s\n' /usr/local/bin/brew
+  fi
+}
+
+BREW_BIN="$(find_brew || true)"
+if [[ -z "$BREW_BIN" ]]; then
+  echo "Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  BREW_BIN="$(find_brew || true)"
+fi
+
+if [[ -z "$BREW_BIN" ]]; then
+  echo "Homebrew was not found after installation" >&2
+  exit 1
+fi
+
+"$BREW_BIN" analytics off >/dev/null
+echo "Homebrew is ready with analytics disabled."

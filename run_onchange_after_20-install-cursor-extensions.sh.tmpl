@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+# Cursor extension manifest hash: {{ include "dot_config/cursor/extensions.txt" | sha256sum }}
+
+if [[ "{{ .chezmoi.os }}" != "darwin" ]]; then
+  echo "Cursor extension installation is macOS-only; skipping."
+  exit 0
+fi
+
+MANIFEST="{{ .chezmoi.homeDir }}/.config/cursor/extensions.txt"
+if ! command -v cursor >/dev/null 2>&1; then
+  echo "Cursor CLI is unavailable; skipping extension installation."
+  exit 0
+fi
+if [[ ! -r "$MANIFEST" ]]; then
+  echo "Cursor extension manifest is missing: $MANIFEST" >&2
+  exit 1
+fi
+
+installed="$(cursor --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+installed_count=0
+
+while IFS= read -r extension || [[ -n "$extension" ]]; do
+  extension="${extension%%#*}"
+  extension="$(printf '%s' "$extension" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  [[ -z "$extension" ]] && continue
+
+  if grep -Fxiq -- "$extension" <<<"$installed"; then
+    continue
+  fi
+
+  echo "Installing Cursor extension: $extension"
+  cursor --install-extension "$extension"
+  installed="${installed}${installed:+$'\n'}${extension}"
+  installed_count=$((installed_count + 1))
+done < "$MANIFEST"
+
+if (( installed_count == 0 )); then
+  echo "All declared Cursor extensions are already installed."
+else
+  echo "Installed $installed_count missing Cursor extension(s)."
+fi

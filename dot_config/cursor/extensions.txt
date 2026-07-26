@@ -1,0 +1,21 @@
+# Keep this list unversioned: the apply hook installs only missing extensions,
+# while Cursor remains responsible for normal extension updates.
+aaron-bond.better-comments
+alefragnani.project-manager
+anysphere.remote-ssh
+biomejs.biome
+catppuccin.catppuccin-vsc
+dbaeumer.vscode-eslint
+eamodio.gitlens
+esbenp.prettier-vscode
+graphite.gti-vscode
+hashicorp.terraform
+naumovs.color-highlight
+oxc.oxc-vscode
+pflannery.vscode-versionlens
+prisma.prisma
+redhat.vscode-yaml
+shardulm94.trailing-spaces
+streetsidesoftware.code-spell-checker
+thang-nm.flow-icons
+typescriptteam.native-preview

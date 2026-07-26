@@ -1,266 +1,472 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Braden's Dot Files" width="100%" />
+  <img src="assets/banner.webp" alt="Braden's Dotfiles" width="100%" />
 </p>
 
 <p align="center">
   <a href="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml"><img src="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" /></a>
-  <a href="https://www.chezmoi.io/"><img src="https://img.shields.io/badge/managed%20with-chezmoi-blue?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwgAADsIBFShKgAAAABl0RVh0U29mdHdhcmUAcGFpbnQubmV0IDQuMC4xMkMEa+wAAALzSURBVFhH7ZVfSFNRHMfPuf+2e527u5pm4pyi5r+0P2amkdqDPfRQUBA99BBFBBJE0ENQD0FBDxH0EEHRQxBBDz0EEUR/KCKxP2plZaalZmpuc3N3t3t37t09945tOrfmQ0Tf4eOc3z2/3+97zj33Xor+RyD/CuAXgMfjuUqS5EWKou6jKGq7uq4xRqNxllar7dRoNIdJkjwEoFW3NgBJkjPALi/lm/1+f7vL5XpGfV6ySZyOEI8bOBWq/UMRVEbNnWfpumVRqPxqE6n22ez2a5RFHVQXRZAEAS/JEl9fr+/1ev17qbe8sVMC+gIguBomq40m80nDAZDB0EQVdLS6LcMwwx4PJ7nHo/nPvV6IcZpwRMIBF66XK5blNP5gJFWfAy4a7FYOo1G41mSJOvkJwBCLMuOuN3uh263+5akKKhDoH6YO6Cy+gZxr8tms922Wq0d8jKiEDzHjbnd7kcul+smdYF7x8v0gWBw0u/3v3S73Q+oN/wYp0UBxJlP+3w+AYi7FEWdQf//5fV6h51O53uHw/GGekC/FxjGhX0Bh8NxraCg4GJFRUW7TqfbhM+4LvZ8Nm63+wXu41sWi6VbvkAE0DTNK0bwBDxvNZvNl4uLiy/k5OQ0SSGE3DjAMEy/0+l84nQ6H1N9fCfnkz7x4UbFYPBaXl5eW0FBwUWz2bxPWZw1+G7+1mKx3KJelncpJRWAyIciETsOhAOBwC8ZZnB8fPyx1Wr9k4rYbsiyH8Trnf8B6L3e22fE15JcBGhJjuO4oUAg0OfxeHoWL17cNmfOnAsZGRl1CMHjOMBx3LjP57s/NjZ2i+rjB+Xz0D7pJRfLPcR9TrdDsCWDZnNmZuYFo9F4Gp9zOEDZjIO4Z8Dtdt8eGxu7S/XyY/LVUGepIXkEiHPUbPRdfLhpvV5/ICUl5TRBEBU4gO/N3+DzdGIeeWVOkf7EF8IVhN9FHiCv+Bj5RHUmk4EupqWlnTYYDOdwU/b7J4A/wLb9G6D9BjAbx3rEbxFDAAAAAElFTkSuQmCC" alt="chezmoi" /></a>
+  <a href="https://www.chezmoi.io/"><img src="https://img.shields.io/badge/managed%20with-chezmoi-2f80ed" alt="managed with chezmoi" /></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS" />
-  <img src="https://img.shields.io/badge/shell-zsh%20%2B%20fish-green?logo=gnubash" alt="zsh + fish" />
-  <img src="https://img.shields.io/badge/theme-Catppuccin%20Macchiato%20%2F%20Dracula-mauve?logo=catppuccin&logoColor=cba6f7" alt="Catppuccin Macchiato / Dracula" />
+  <img src="https://img.shields.io/badge/shell-zsh%20%2B%20fish-4eaa25" alt="zsh and fish" />
 </p>
 
----
-
-One repo to carry an entire development environment between machines. Everything that can be automated is automated — packages are installed, configs are templated per machine type, and a post-apply checklist catches anything that needs manual attention (SSH keys, GPG keys, fonts). Machine-specific secrets like signing keys are prompted at init time, never hardcoded, and SSH host config stays local-only.
-
----
-
-### Quick Start
-
-```bash
-xcode-select --install
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply Braden1996
-```
-
-First apply can take a few minutes on a fresh machine because it may install Homebrew, Brew packages, and `mise` runtimes.
-
-### Design Goals
-
-- **Fast shell startup** — cache generated init for `starship`, `fzf`, and `zoxide`, prefer `mise` shims over full shell hooks, and keep shell config modular.
-- **Portable between laptops** — detect Homebrew prefix dynamically, template only the parts that actually vary by machine, and route work Git identity by remote org instead of hardcoded checkout paths.
-- **Keep local state local** — SSH host config, auth state, generated keys, and other machine-bound setup stay outside the tracked repo.
-
-### New Machine Setup
-
-#### Prerequisites
-
-```bash
-xcode-select --install
-```
-
-#### 1. Install and apply
-
-If chezmoi is not yet installed (fresh machine):
-
-```bash
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply Braden1996
-```
-
-Or if chezmoi is already installed:
-
-```bash
-chezmoi init --apply Braden1996
-```
-
-#### 2. Init prompts
-
-You'll be prompted for these values (stored locally, never committed):
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `machineType` | `personal` or `work` | `work` |
-| `gitName` | Git author name | `Braden Marshall` |
-| `personalEmail` | Personal email for git | `me@bradenm.co.uk` |
-| `workEmail` | Work email (work machines only) | `braden@attio.com` |
-| `workGitHubOrg` | GitHub org for work repos (optional, work machines only) | `Attio` |
-| `onePasswordAccount` | 1Password account domain | `my.1password.com` |
-| `gpgKeyPersonalEmail` | GPG signing key ID for your personal email | `38D2DE75C7CD663D` |
-| `gpgKeyWorkEmail` | GPG signing key ID for your work email (work only) | `9BD932BC6F57FB4E` |
-
-> **Tip:** If you haven't generated your GPG keys yet, leave the signing key fields blank. Generate them in the next step and then re-run `chezmoi init` to fill them in.
-
-#### 3. What happens automatically
-
-- **Homebrew** is installed if missing (with Apple Silicon detection)
-- **Packages** are installed via Brewfile — shell tools, editors, `mise`, `biome`, `jq`, 1Password CLI, Ghostty
-- **Runtimes and global tools** are installed via `mise` using the global Node/Python/Biome defaults
-- **Configs** are templated and written to `~` — git, zsh, fish, starship, editors, terminal, tmux
-- **TPM** (tmux plugin manager) is cloned if not present
-- **Post-setup checklist** runs and flags anything that still needs manual attention
-
-#### 4. Post-setup manual steps
-
-The setup checklist will tell you what's missing, but here's the full list:
-
-**Generate an SSH key and add it to GitHub:**
-
-```bash
-ssh-keygen -t ed25519 -C "your-email@example.com"
-eval "$(ssh-agent -s)"
-ssh-add ~/.ssh/id_ed25519
-pbcopy < ~/.ssh/id_ed25519.pub
-# Add at: https://github.com/settings/ssh/new
-```
-
-**Generate a GPG key and add it to GitHub:**
-
-```bash
-gpg --full-generate-key          # choose Ed25519, use your git email
-gpg --list-secret-keys --keyid-format=long   # note the key ID
-gpg --armor --export YOUR_KEY_ID | pbcopy
-# Add at: https://github.com/settings/gpg/new
-```
-
-Then re-run `chezmoi init` to set the key ID in your config.
-
-**Other manual steps:**
-
-- **1Password** — sign in with `op signin`
-- **Nerd Font** — install [FiraCode Nerd Font](https://www.nerdfonts.com/) (used by editors, starship, terminal)
-- **Tmux plugins** — open tmux and press `prefix + I`
-- **Neovim plugins** — open nvim and run `:PlugInstall`
-- **SSH config** — keep `~/.ssh/config` local-only and unmanaged by chezmoi
-
-#### 5. What stays local
-
-- **SSH host config** — `~/.ssh/config` is intentionally unmanaged so work- and machine-specific hosts do not leak into the repo
-- **Auth state** — `op signin`, SSH agent state, and GPG agent state remain local to the machine
-- **Secrets and keys** — private keys are never stored in the repo; only public identifiers like GPG key IDs are prompted into local chezmoi data
-- **Fonts and app state** — fonts, editor extensions, and login sessions still need a one-time local install/sign-in
-
-#### 6. Verify
-
-```bash
-ssh -T git@github.com            # SSH works
-echo "test" | gpg --clearsign    # GPG signing works
-zsh-check-deps                   # all tools installed
-fish-check-deps                  # fish prompt/tooling dependencies installed
-chezmoi verify                   # applied files match the target state
-```
+macOS-first development environment managed with [chezmoi](https://www.chezmoi.io/).
+GitHub keys and git identities come from 1Password and are never written to disk.
 
 ---
 
-### What's Included
+## Set up a new machine
 
-<table>
-<tr><td><b>Shell</b></td><td>zsh, fish, antidote, starship prompt, fzf, zoxide, bat, eza, yazi</td></tr>
-<tr><td><b>Editor</b></td><td>Cursor (primary), neovim, zed</td></tr>
-<tr><td><b>Terminal</b></td><td>ghostty, alacritty, iterm2</td></tr>
-<tr><td><b>Git</b></td><td>gpg signing, graphite, conditional work includes, aliases</td></tr>
-<tr><td><b>Tmux</b></td><td>tmux + TPM, dracula theme</td></tr>
-<tr><td><b>Files</b></td><td>yazi (Ctrl+y picker), ranger</td></tr>
-<tr><td><b>Languages</b></td><td>mise (Node/Python/Biome with legacy version-file support), optional bun shims if installed separately</td></tr>
-<tr><td><b>Security</b></td><td>1Password CLI (<code>op://</code> URIs), GPG commit signing</td></tr>
-<tr><td><b>Theme</b></td><td>Catppuccin Macchiato (ghostty, zed, starship, fzf, fsh) / Dracula (alacritty, iterm2, nvim, tmux)</td></tr>
-</table>
+1. **Install.**
 
-### Highlights
+   ```bash
+   xcode-select --install
+   sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply https://github.com/Braden1996/dotfiles.git
+   ```
 
-<details>
-<summary><b>Mise-managed runtimes</b></summary>
-<br/>
-<code>mise</code> manages global Node, Python, and Biome versions from one config while still honoring legacy project files like <code>.nvmrc</code>, <code>.python-version</code>, and <code>.ruby-version</code>.
-</details>
+   HTTPS, not SSH — the key this sets up doesn't exist yet.
 
-<details>
-<summary><b>Work / personal machine branching</b></summary>
-<br/>
-Set <code>machineType</code> at init to toggle work-specific git configs (separate signing key, email, conditional includes for the configured work GitHub org). Architecture-aware paths handle Apple Silicon vs Intel Homebrew locations.
-</details>
+2. **Answer the prompts.** See [Init data](#init-data). No key material is asked for.
 
-<details>
-<summary><b>Starship prompt</b></summary>
-<br/>
-Full Catppuccin Macchiato palette, rune character (<code>ᛃ</code>) for success/error/vim mode indicators, git state detection (rebase, cherry-pick, merge, bisect), directory icons via Nerd Font substitutions, and right-aligned command duration + clock.
-</details>
+3. **Install the helper commands.** No-op if step 1 applied; needed if you re-inited without applying.
 
-<details>
-<summary><b>FZF everywhere</b></summary>
-<br/>
-Catppuccin colors, bat-powered preview windows, fzf-tab for completions, Ctrl+R history with a 60% preview panel, and magic-enter integration (Cmd+Enter for git status or directory listing).
-</details>
+   ```bash
+   chezmoi apply ~/.local/bin
+   ```
 
-<details>
-<summary><b>Git aliases</b></summary>
-<br/>
-<code>shit</code> (amend), <code>fuck</code> (amend + force push), <code>nuke</code> (reset --hard + clean), <code>ignore</code> (append to .gitignore), <code>ls</code> / <code>ll</code> (compact log formats).
-</details>
+4. **Give `op` access.**
+   - *Personal:* 1Password → Settings → Developer → **Integrate with 1Password CLI**. The SSH agent setting is not used.
+   - *Work:* `dotfiles-keys store-token` (prompts without echoing; never hits argv, `ps` or history).
 
-<details>
-<summary><b>Antidote plugin loading</b></summary>
-<br/>
-Core: zephyr (prompt, completion). Oh-My-Zsh: git, magic-enter, extract, sudo. Deferred: autosuggestions, autopair, you-should-use, forgit, fast-syntax-highlighting. Atomic bundle regeneration prevents race conditions.
-</details>
+5. **Create and publish this machine's keys.**
 
-<details>
-<summary><b>Fish without a plugin manager</b></summary>
-<br/>
-Fish uses native <code>conf.d</code> autoloading plus cached init output for <code>starship</code>, <code>fzf</code>, and <code>zoxide</code>. Custom helpers and Nx completions live in-repo instead of depending on a runtime plugin manager.
-</details>
+   ```bash
+   dotfiles-keys setup
+   ```
 
-<details>
-<summary><b>1Password integration</b></summary>
-<br/>
-<code>op://</code> URIs in templated configs for secrets, CLI completion hooks in zsh, and GPG signing key storage.
-</details>
+6. **Apply.** Review first — an existing machine may have unrelated pending changes.
 
-<details>
-<summary><b>CI pipeline</b></summary>
-<br/>
-Template validation via chezmoi, shellcheck linting (SC1090/SC1091 excluded), JSON validation for editor configs, and automatic PR labeling by area (shell, git, editor, terminal, tmux, chezmoi).
-</details>
+   ```bash
+   chezmoi diff && chezmoi apply
+   ```
 
-<details>
-<summary><b>Dependency checker</b></summary>
-<br/>
-Run <code>zsh-check-deps</code> or <code>fish-check-deps</code> to verify required tools (starship, fzf, mise) and optional ones (eza, bat, yazi, zoxide) with install hints.
-</details>
+7. **Check.** `dotfiles-keys status` · `dotfiles-doctor` · `ssh -T git@github.com`
 
-### Structure
+**Existing machine:** run `chezmoi init --prompt` first, then from step 3. Prompts default to
+current values, so enter keeps them. Git doesn't sign until step 5 completes.
 
+---
+
+## Everyday commands
+
+| Situation | Run |
+| --- | --- |
+| Work machine, start of day | `dotfiles-keys load` |
+| Add a git identity | `dotfiles-keys identity-add <slug> <email> <owner/**>` |
+| Added a machine or identity elsewhere | `dotfiles-keys sync` |
+| Something feels wrong | `dotfiles-doctor` |
+| Routine update | `dotfiles-update --check`, then `dotfiles-update` |
+| Changed the source | `chezmoi diff && chezmoi apply` |
+| Changed any package or plugin list | `mise run docs` |
+| Before pushing repo changes | `mise run check` |
+| Retire one machine | delete its 2 GitHub keys + vault items, then `dotfiles-keys sync` elsewhere |
+| Retire all work machines | disable the service account in 1Password |
+
+---
+
+## What's managed
+
+- **Shells** — zsh + fish, pinned plugins, Starship, fzf, zoxide
+- **Editors** — Cursor settings and extensions, AstroNvim v5 with a locked plugin graph
+- **Terminal** — Ghostty, tmux with checksum-pinned plugins
+- **Git** — SSH commit signing, one include for vault-driven identities, Graphite aliases
+- **SSH** — `~/.ssh/config` per profile
+- **Packages** — profile-aware Brewfile, locked mise runtimes
+
+**Never written by an apply:** private keys, public key files, git identities, the trust store,
+the service account token, `~/.gitconfig.local`. Those are either runtime-owned or machine-local.
+
+---
+
+## Appendix
+
+Generated from the files that drive an apply — `mise run check:docs` fails if they drift,
+`mise run docs` regenerates. Package descriptions come from Homebrew itself.
+
+### Packages
+
+<!-- generated:packages -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+#### Taps
+
+- `withgraphite/tap`
+
+#### Formulae
+
+*Shell and prompt*
+
+- `antidote` — Plugin manager for zsh, inspired by antigen and antibody
+- `fish` — User-friendly command-line shell for UNIX-like operating systems
+- `starship` — Cross-shell prompt for astronauts
+- `zsh` — UNIX shell (command interpreter)
+
+*Core CLI tools*
+
+- `bat` — Clone of cat(1) with syntax highlighting and Git integration
+- `chezmoi` — Manage your dotfiles across multiple diverse machines, securely
+- `eza` — Modern, maintained replacement for ls
+- `fd` — Simple, fast and user-friendly alternative to find
+- `fzf` — Command-line fuzzy finder written in Go
+- `hyperfine` — Command-line benchmarking tool
+- `jq` — Lightweight and flexible command-line JSON processor
+- `ripgrep` — Search tool like grep and The Silver Searcher
+- `yazi` — Blazing fast terminal file manager written in Rust, based on async I/O
+- `zoxide` — Shell extension to navigate your filesystem faster
+
+*Development and validation*
+
+- `gh` — GitHub command-line tool
+- `git` — Distributed revision control system
+- `git-delta` — Syntax-highlighting pager for git and diff output
+- `gnupg` — GNU Privacy Guard (OpenPGP)
+- `mise` — Polyglot runtime manager (asdf rust clone)
+- `shellcheck` — Static analysis and lint tool, for (ba)sh scripts
+- `shfmt` — Autoformat shell script source code
+- `taplo` — TOML toolkit written in Rust
+- `tmux` — Terminal multiplexer
+- `withgraphite/tap/graphite` — Allows you to manage your stacked changes and submit them for review on GitHub
+
+#### Casks
+
+*Credentials*
+
+- `1password-cli` — Command-line interface for 1Password
+
+*Desktop tools*
+
+- `cursor` — Write, edit, and chat about your code with AI
+- `font-fira-code-nerd-font`
+- `ghostty` — Terminal emulator that uses platform-native UI and GPU acceleration
+- `1password` — Password manager that keeps all passwords secure behind one password _(personal only)_
+
+<!-- /generated:packages -->
+
+### Runtimes and toolchains
+
+<!-- generated:runtimes -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+#### Global runtimes (mise)
+
+- `biome` 2
+- `node` 22
+- `python` 3.13
+- `rust` stable
+- `terraform` 1.15
+
+#### Repository validation toolchain
+
+- `actionlint` 1.7.12
+- `biome` 2.5.3
+- `chezmoi` 2.71.0
+- `gitleaks` 8.30.1
+- `jq` 1.8.1
+- `shellcheck` 0.11.0
+- `shfmt` 3.13.1
+- `starship` 1.26.0
+- `stylua` 2.5.2
+- `taplo` 0.10.0
+- `zizmor` 1.26.1
+- `aqua:Kampfkarren/selene` 0.31.0
+
+<!-- /generated:runtimes -->
+
+### Editor and shell plugins
+
+<!-- generated:editor-and-shell -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+#### Cursor extensions (19)
+
+- `aaron-bond.better-comments`
+- `alefragnani.project-manager`
+- `anysphere.remote-ssh`
+- `biomejs.biome`
+- `catppuccin.catppuccin-vsc`
+- `dbaeumer.vscode-eslint`
+- `eamodio.gitlens`
+- `esbenp.prettier-vscode`
+- `graphite.gti-vscode`
+- `hashicorp.terraform`
+- `naumovs.color-highlight`
+- `oxc.oxc-vscode`
+- `pflannery.vscode-versionlens`
+- `prisma.prisma`
+- `redhat.vscode-yaml`
+- `shardulm94.trailing-spaces`
+- `streetsidesoftware.code-spell-checker`
+- `thang-nm.flow-icons`
+- `typescriptteam.native-preview`
+
+#### Zsh plugins (Antidote, all pinned)
+
+- `mattmc3/zephyr/plugins/helper` @ 35b5e56
+- `mattmc3/zephyr/plugins/prompt` @ 35b5e56
+- `zsh-users/zsh-completions/src` @ 8b97eaf
+- `mattmc3/zephyr/plugins/completion` @ 35b5e56
+- `mattmc3/zephyr/plugins/compstyle` @ 35b5e56
+- `ohmyzsh/ohmyzsh/plugins/git` @ 7c10d98
+- `Aloxaf/fzf-tab` @ 0983009
+- `jirutka/zsh-shift-select` @ da46099
+- `zsh-users/zsh-autosuggestions` @ 85919cd
+- `zdharma-continuum/fast-syntax-highlighting` @ 3d574cc
+
+#### Neovim
+
+- AstroNvim v5 with 46 plugins pinned in `dot_config/nvim/lazy-lock.json`.
+- The lock is not listed here: it churns on every plugin update. Read the file.
+
+<!-- /generated:editor-and-shell -->
+
+### Pinned externals
+
+<!-- generated:externals -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+Fetched at apply time and verified against a recorded SHA-256.
+
+- `.tmux/plugins/tpm` — https://codeload.github.com/tmux-plugins/tpm/tar.gz/e261deb1b47614eed3400089ce7197dc68acc4eb
+- `.tmux/plugins/tmux-sensible` — https://codeload.github.com/tmux-plugins/tmux-sensible/tar.gz/25cb91f42d020f675bb0a2ce3fbd3a5d96119efa
+- `.tmux/plugins/tmux` — https://codeload.github.com/dracula/tmux/tar.gz/a4612670d77c8546690dc79d23eae591c6dfa8d3
+
+<!-- /generated:externals -->
+
+### Commands and hooks
+
+<!-- generated:apply-surface -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+#### Scripts that run during an apply
+
+These execute on your machine. Read them before applying on a host you do not control.
+
+- `99-setup-reminders.sh` (once)
+- `00-install-homebrew.sh` (once)
+- `05-install-packages.sh` (on change)
+- `10-install-mise-tools.sh` (on change)
+- `20-install-cursor-extensions.sh` (on change)
+- `20-macos-personal-settings.sh` (on change)
+
+#### Commands installed to `~/.local/bin`
+
+##### `dotfiles-doctor`
+
+```text
+Usage: dotfiles-doctor [--project PATH]
+
+Run workstation checks without changing managed state. With --project, also
+inspect an Nx workspace's telemetry choice and .cursorignore coverage.
 ```
-.
-├── .chezmoi.toml.tmpl              # prompted config (machine type, emails, GPG keys)
-├── .chezmoiignore                  # conditional ignores
-├── dot_gitconfig.tmpl              # git config (templated signing key)
-├── dot_attio.gitconfig.tmpl        # work-specific git config (templated)
-├── dot_zshrc                       # main zsh entry
-├── dot_zshenv.tmpl                 # zsh environment
-├── dot_zprofile                    # login shell setup
-├── dot_zsh_plugins.txt             # antidote plugin list
-├── dot_tmux.conf                   # tmux config
-├── dot_bashrc                      # bash fallback
-├── dot_profile                     # POSIX profile
-├── dot_local/bin/                  # lightweight wrappers (ghostty-fish, corepack shims)
-├── empty_dot_hushlogin             # suppress login banner
-├── run_once_before_*.sh.tmpl       # homebrew + package bootstrap
-├── run_once_after_*.sh.tmpl        # post-apply setup + checklist
-├── dot_config/
-│   ├── fish/                       # fish conf.d, functions, completions
-│   ├── zsh/                        # modular zsh configs (00-99)
-│   │   ├── 00-path.zsh             #   PATH management
-│   │   ├── 10-options.zsh          #   shell options & history
-│   │   ├── 20-plugins.zsh          #   antidote + starship init
-│   │   ├── 30-completion.zsh       #   fzf-tab, bookmarks
-│   │   ├── 40-tools.zsh            #   mise shims, fzf, zoxide
-│   │   ├── 50-functions.zsh.tmpl   #   yazi, workspace-aware nx wrapper
-│   │   ├── 70-keybindings.zsh      #   Ctrl+y, arrow keys
-│   │   └── 99-local.zsh.tmpl       #   machine-specific
-│   ├── zed/settings.json.tmpl      # zed editor (biome, catppuccin)
-│   ├── ghostty/config.tmpl         # ghostty (catppuccin, blur, wrapper command)
-│   ├── alacritty/alacritty.yml     # alacritty (dracula)
-│   ├── iterm2/Default.json         # iterm2 profile
-│   ├── starship.toml               # prompt (catppuccin palette)
-│   ├── nvim/init.vim               # neovim (dracula, plug)
-│   ├── fsh/                        # fast-syntax-highlighting theme
-│   ├── ranger/                     # file manager + devicons
-│   ├── graphite/aliases            # git stacking aliases
-│   └── private_git/                # private git ignores
-├── private_Library/
-│   └── .../Cursor/User/            # cursor settings & keybindings
+
+##### `dotfiles-keys`
+
+```text
+Usage: dotfiles-keys <command>
+
+Commands:
+  setup         Guided first run: check prerequisites, then generate, publish, sync
+  store-token   Store the service account token in the macOS keychain (work only)
+  status        Report the credential backend, agent, and which keys are usable
+  generate      Create this machine's SSH keys inside 1Password
+  publish       Add this machine's public keys to your GitHub account
+  sync          Write public keys, git identities and the trust store from the vault
+  sync-signers  Rebuild only ~/.ssh/allowed_signers from every machine in the vault
+  identity-add  Add a git identity: identity-add <slug> <email> <owner/** | owner/repo>
+  load          Read this machine's keys from 1Password into the ssh-agent
+  unload        Drop the loaded keys from the ssh-agent
+  token         Print the GitHub token from the vault, for GH_TOKEN
+
+Keys are per-machine, named for this host, so revoking one machine is a single
+GitHub key deletion. Private keys are never written to disk: `generate` creates
+them inside 1Password and `load` streams them straight into the agent.
 ```
 
-### Common Commands
+##### `dotfiles-update`
+
+```text
+Usage: dotfiles-update [--check] [--refresh-antidote-pins]
+
+Without flags, fast-forward the Chezmoi source, apply it, upgrade only the
+packages declared by the managed Brewfile, upgrade mise tools within their
+configured series, and update declared Cursor extensions.
+
+  --check  Report available updates and run dotfiles-doctor without changing
+           managed files or installed versions.
+  --refresh-antidote-pins
+           Explicitly refresh every pinned Antidote plugin to its upstream
+           HEAD. This changes the Chezmoi source and is never done by default.
+  -h       Show this help.
+```
+
+Plus package-manager shims that take the underlying tool's own arguments: `pnpm` `pnpx` `yarn` 
+
+#### Repository checks
+
+- `mise run check:actions` — Lint GitHub Actions workflows
+- `mise run check:data` — Validate repository TOML and JSON data
+- `mise run check:chezmoi` — Render and apply both machine profiles in disposable homes
+- `mise run docs` — Regenerate the README inventory from its sources of truth
+- `mise run check:docs` — Fail if the README inventory no longer matches what is installed
+- `mise run check:lua` — Check Neovim formatting and Lua diagnostics
+- `mise run check:scripts` — Lint repository validation scripts
+- `mise run check:secrets` — Scan Git history and the working tree for secrets
+- `mise run check:static` — Run fast, platform-independent checks
+- `mise run check` — Run the complete local validation suite
+- `mise run format:lua` — Format active Neovim Lua files
+
+<!-- /generated:apply-surface -->
+
+### Init data
+
+<!-- generated:init-data -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+Prompted once and stored only in the machine-local chezmoi config.
+
+| Key | Prompt |
+| --- | --- |
+| `machineType` | Machine type (personal/work) |
+| `gitName` | Git author name |
+| `personalEmail` | Personal email address |
+| `machineName` | Short name for this machine, used to scope its GitHub keys |
+| `opVault` | 1Password vault for this machine's GitHub keys (name or ID) |
+| `credentialBackend` | Derived from `machineType`, not prompted |
+
+<!-- /generated:init-data -->
+
+### Privacy environment
+
+<!-- generated:privacy-env -->
+<!-- Do not edit by hand: run `mise run docs`. -->
+Exported by Fish, Zsh and Bash alike.
+
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+- `DO_NOT_TRACK=1`
+- `GH_TELEMETRY=0`
+- `GRAPHITE_DISABLE_TELEMETRY=1`
+- `GROK_TELEMETRY_ENABLED=0`
+- `HOMEBREW_NO_ANALYTICS=1`
+- `SST_TELEMETRY_DISABLED=1`
+- `YARN_ENABLE_TELEMETRY=0`
+
+<!-- /generated:privacy-env -->
+
+---
+
+## Concepts
+
+### Credentials
+
+Both profiles work the same way: `dotfiles-keys load` reads the key from 1Password and adds it
+to the **OS ssh-agent**. Nothing is written to disk, and nothing gates its use.
+
+| Profile | Key lifetime in the agent | If the service account is revoked |
+| --- | --- | --- |
+| `personal` | Until logout | Nothing — it authenticates as you, not via the service account |
+| `work` | 9 hours | Next load fails; access ends |
+
+- **The 1Password SSH agent is deliberately not used.** It asks approval per client, which no
+  unattended process can answer — so it would stop agent harnesses and CI from pushing or
+  signing. 1Password is the source of truth for the key, not a gate on using it. The `op` CLI
+  itself works fine non-interactively, which is what makes this possible.
+- **Nothing durable on a work machine.** Writing a key file would leave a working credential
+  behind, so a work machine is never told to use an on-disk key even if one exists.
+- **Keys are per-machine**, titled for the host, so revoking one machine is one GitHub key
+  deletion and signatures stay attributable.
+- **The work TTL** bounds how long a revoked machine keeps working. Personal machines don't
+  expire: revocation isn't their threat model, and a lapsed key would strand overnight jobs.
+- **Copies already extracted survive revocation.** Per-machine keys bound the blast radius to
+  one machine; they don't eliminate it.
+- After a reboot, run `dotfiles-keys load` once. `dotfiles-doctor` says when it's missing.
+
+### Git identities
+
+An identity is an email plus a rule for which repos it applies to. There is no fixed slot for
+"work" or "side project" — those were the same thing modelled twice.
+
+- **One 1Password item per identity**, in the vault this machine is configured for. That vault
+  *is* the scope: a work machine cannot see a personal identity because it cannot read the vault
+  holding it.
+- **Scopes** are `owner/**` for a whole org or `owner/repo` for one repo. Exact repos emit both
+  the bare and `.git` URL forms — a suffixless clone does not match a suffixed pattern, which
+  silently drops the identity.
+- **Overlapping scopes: last match wins**, so identities are sorted by slug to stay deterministic.
+- `~/.gitconfig` carries one static include; `dotfiles-keys sync` writes the routing and the
+  per-identity files. chezmoi never templates them — it only knows the machine it rendered on,
+  and only the vault knows how many identities exist.
+- `dotfiles-update` refreshes them, and doesn't fail the update if the vault is unreachable.
+
+### SSH signing, not GPG
+
+- `gpg --import` persists the private key into `~/.gnupg`, defeating the revocation property
+  above. An agent-held SSH key signs with nothing on disk.
+- GitHub marks SSH signatures **Verified** exactly like GPG.
+- Existing GPG keys still verify old commits; nothing wires them into git. For one repo:
+  `git config --local gpg.format openpgp`.
+
+### The app and the CLI are separate
+
+- The desktop app ships `op-ssh-sign`, **not** `op`. Install the CLI separately.
+- **"Integrate with 1Password CLI"** doesn't install anything — it lets the app *authenticate* an
+  `op` you installed. Setting on and `op` missing is a normal state.
+- Personal machines need `op` for setup, sync and `load`. Once loaded, auth and signing are
+  pure ssh-agent operations and touch 1Password not at all.
+- Git signs via plain `ssh-keygen`, not `op-ssh-sign`, so one gitconfig works on a machine with
+  no app — and `ssh-keygen -Y sign` reads `SSH_AUTH_SOCK`, which is why pinning `IdentityAgent`
+  would not have covered signing anyway.
+
+### The GitHub token (optional)
+
+`gh` needs an API token and a work machine can't log in interactively:
 
 ```bash
-chezmoi update          # pull latest changes and apply
-chezmoi diff            # preview what would change
-chezmoi apply           # apply without pulling
-chezmoi verify          # confirm target and destination still match
-chezmoi edit ~/.zshrc   # edit zsh entrypoint
-chezmoi edit ~/.config/fish/config.fish   # edit fish entrypoint
-chezmoi add ~/.config/foo/bar    # start managing a new file
-chezmoi cd              # cd into the source directory
-chezmoi init            # re-run prompts (e.g. after generating a GPG key)
+GH_TOKEN="$(dotfiles-keys token)" gh pr list
+```
+
+Nothing creates it — GitHub has no API for minting fine-grained PATs. Make one in the UI, store
+it in the vault as `GitHub Machine PAT` with the token in its `credential` field. Revoking the
+service account does **not** revoke a copy already fetched, so keep the expiry short.
+
+### Privacy
+
+- Telemetry opt-outs are listed under [Privacy environment](#privacy-environment); the
+  provisioning hook also persists the ones that are CLI settings rather than env vars.
+- Terraform keeps security bulletins, drops the anonymous checkpoint signature.
+- Update and security checks are **not** treated as telemetry — disabling them would hide
+  security notices.
+- Shell history stays local: prefix a command with a space, or use `fish --private`.
+- Gitleaks scans history and the working tree on every run.
+
+### Validation
+
+```bash
+mise trust && mise install --locked
+mise run check
+```
+
+- Renders **both** profiles, dry-runs, applies twice to disposable homes, asserts the second
+  apply is clean.
+- Lints rendered scripts by shebang, so the doctor and credential helper are covered.
+- Asserts no apply writes key material, that a work machine never references a durable on-disk
+  key, that chezmoi manages neither the key files nor identities, and that `brew`/`cask` entries
+  really are formulae and casks.
+- CI repeats it on Ubuntu and macOS across two chezmoi versions.
+
+### Layout
+
+```text
+.chezmoi.toml.tmpl     # prompts → machine-local config
+.chezmoidata.toml      # shared non-secret data
+.chezmoiexternal.toml  # checksum-pinned externals
+.chezmoiignore         # repo-only and platform exclusions
+.chezmoiremove         # files retired from source
+dot_config/            # fish, zsh, nvim, ghostty, cursor, mise, homebrew
+private_dot_ssh/       # ssh config (public material only)
+dot_local/bin/         # dotfiles-keys, dotfiles-doctor, dotfiles-update
+run_*                  # guarded bootstrap and apply hooks
+scripts/               # generate-docs, validate-chezmoi
 ```

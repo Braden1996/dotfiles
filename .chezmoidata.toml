@@ -1,0 +1,47 @@
+# Static, non-secret coordinates for the machine GitHub credentials. The vault
+# name itself is machine-local data because only service-account machines have
+# one; these item and field names are the same everywhere.
+[credentials]
+# Keys are per-machine: the real item titles are these prefixes followed by
+# " (<hostname>)". That is what lets one machine be revoked on GitHub without
+# touching the others, and what makes a signature attributable to a machine.
+authItemPrefix = "GitHub Machine Auth"
+signItemPrefix = "GitHub Machine Sign"
+tokenItem = "GitHub Machine PAT"
+# One 1Password item per git identity, in the vault matching the machine's trust
+# boundary. That vault IS the scope: a work machine cannot see personal
+# identities because it cannot read the vault holding them.
+identityItemPrefix = "Git Identity"
+identityEmailField = "email"
+identityScopeField = "scope"
+# chezmoi owns the one-line include; this file and the directory beside it are
+# written at runtime from the vault. Relative to $HOME.
+identityIncludeFile = ".config/git/identities.gitconfig"
+identityDir = ".config/git/identities"
+# The private-key reference is not listed here: reading it requires a
+# `?ssh-format=openssh` query that only the loader understands, so the whole
+# reference lives with the code that uses it rather than being half-declared.
+publicKeyField = "public key"
+tokenField = "credential"
+# Work machines hold keys in agent memory with a lifetime, so a revoked service
+# account stops mattering by the next morning. Personal machines load without an
+# expiry: revocation was never their threat model, and an unattended agent that
+# finds a dead key at 3am cannot sign.
+agentKeyLifetime = "9h"
+# Where a work machine's service account token lives. The macOS Keychain is
+# preferred: a 0600 file is readable by anything running as the user, whereas a
+# Keychain item is encrypted at rest and gated by the item's access control.
+# The file remains a fallback for non-macOS hosts.
+serviceAccountKeychainService = "dotfiles-op-service-account"
+# Machine-local, never managed by chezmoi, never committed. Relative to $HOME.
+serviceAccountTokenFile = ".config/op/service-account-token"
+
+[privacyEnv]
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"
+DO_NOT_TRACK = "1"
+GH_TELEMETRY = "0"
+GRAPHITE_DISABLE_TELEMETRY = "1"
+GROK_TELEMETRY_ENABLED = "0"
+HOMEBREW_NO_ANALYTICS = "1"
+SST_TELEMETRY_DISABLED = "1"
+YARN_ENABLE_TELEMETRY = "0"

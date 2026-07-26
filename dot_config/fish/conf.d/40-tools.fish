@@ -20,7 +20,9 @@ function __braden_cached_init --argument-names cache_name command_name
     set -l bin_path (type -P $command_name 2>/dev/null)
     test -n "$bin_path"; or return 1
 
-    set -l cache_dir "$HOME/.cache/fish"
+    set -l cache_root "$HOME/.cache"
+    set -q XDG_CACHE_HOME; and set cache_root "$XDG_CACHE_HOME"
+    set -l cache_dir "$cache_root/fish"
     set -l cache_file "$cache_dir/$cache_name.fish"
 
     if not test -d "$cache_dir"
@@ -30,20 +32,19 @@ function __braden_cached_init --argument-names cache_name command_name
     if not test -s "$cache_file"; or test "$bin_path" -nt "$cache_file"
         set -l temp_file "$cache_file.$fish_pid.tmp"
 
-        command $command_name $cmd_args >"$temp_file"
-        or begin
+        if command $command_name $cmd_args >"$temp_file"; and test -s "$temp_file"
+            command mv -f "$temp_file" "$cache_file" 2>/dev/null
+            or rm -f "$temp_file"
+        else
             rm -f "$temp_file"
-            return 1
+            test -s "$cache_file"; or return 1
         end
-
-        command mv -f "$temp_file" "$cache_file" 2>/dev/null
-        or rm -f "$temp_file"
     end
 
     source "$cache_file"
 end
 
-if status is-interactive
+if status is-interactive; and isatty stdin; and isatty stdout
     if command -q zoxide
         __braden_cached_init zoxide-init zoxide init fish
     end

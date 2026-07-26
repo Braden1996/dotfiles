@@ -1,9 +1,49 @@
-if [ -d "$HOME/.local/bin" ]; then
-  case ":$PATH:" in
-    *":$HOME/.local/bin:"*) ;;
-    *) export PATH="$HOME/.local/bin:$PATH" ;;
+# Shared POSIX environment used by login shells and Bash fallbacks.
+if [ -r "$HOME/.config/shell/privacy.env" ]; then
+  . "$HOME/.config/shell/privacy.env"
+fi
+
+if [ -z "${HOMEBREW_PREFIX:-}" ]; then
+  if [ -x /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [ -x /usr/local/bin/brew ]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+fi
+
+__braden_path_append() {
+  [ -d "$1" ] || return 0
+  case ":${__braden_new_path:-}:" in
+    *":$1:"*) ;;
+    *) __braden_new_path="${__braden_new_path:+$__braden_new_path:}$1" ;;
   esac
-fi
-if [ -f "$HOME/.cargo/env" ]; then
-  . "$HOME/.cargo/env"
-fi
+}
+
+# Rebuild PATH once so existing entries cannot disturb the shared precedence.
+__braden_homebrew_prefix="${HOMEBREW_PREFIX:-/opt/homebrew}"
+[ -d "$__braden_homebrew_prefix" ] || __braden_homebrew_prefix=/usr/local
+__braden_new_path=
+__braden_path_append "$HOME/.local/bin"
+__braden_path_append "$HOME/.local/share/mise/shims"
+__braden_path_append "$HOME/.bun/bin"
+__braden_path_append "$HOME/.cargo/bin"
+__braden_path_append "$HOME/.antigravity/antigravity/bin"
+__braden_path_append "$HOME/.grok/bin"
+__braden_path_append "$HOME/.kimi-code/bin"
+__braden_path_append "$__braden_homebrew_prefix/bin"
+__braden_path_append "$__braden_homebrew_prefix/sbin"
+__braden_path_append /usr/local/bin
+__braden_path_append "$HOME/Library/Android/sdk/platform-tools"
+__braden_path_append "$HOME/.safe-chain/bin"
+
+__braden_remaining_path="$PATH:"
+while [ -n "$__braden_remaining_path" ]; do
+  __braden_path_dir=${__braden_remaining_path%%:*}
+  __braden_remaining_path=${__braden_remaining_path#*:}
+  [ -n "$__braden_path_dir" ] && __braden_path_append "$__braden_path_dir"
+done
+PATH=$__braden_new_path
+export PATH
+export BUN_INSTALL="$HOME/.bun"
+unset __braden_homebrew_prefix __braden_new_path __braden_remaining_path __braden_path_dir
+unset -f __braden_path_append 2>/dev/null || unset __braden_path_append

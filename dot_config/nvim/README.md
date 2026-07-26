@@ -1,34 +1,14 @@
-# AstroNvim Template
+# Neovim
 
-**NOTE:** This is for AstroNvim v5+
+This is an AstroNvim v5 configuration managed by chezmoi. `lazy-lock.json`
+pins the resolved plugin graph; update it intentionally with `:Lazy update`.
 
-A template for getting started with [AstroNvim](https://github.com/AstroNvim/AstroNvim)
+The active customizations are deliberately small:
 
-## 🛠️ Installation
+- `lua/plugins/neo-tree.lua` adds a debounced, scrollable file preview.
+- `lua/plugins/project_config.lua` loads trusted `.nvim.lua` files from Git roots.
+- `lua/plugins/minimap.lua` wires codewindow.nvim to `<Leader>um` / `<Leader>uM`.
+- `lua/lazy_setup.lua` contains the AstroNvim and lazy.nvim baseline.
 
-#### Make a backup of your current nvim and shared folder
-
-```shell
-mv ~/.config/nvim ~/.config/nvim.bak
-mv ~/.local/share/nvim ~/.local/share/nvim.bak
-mv ~/.local/state/nvim ~/.local/state/nvim.bak
-mv ~/.cache/nvim ~/.cache/nvim.bak
-```
-
-#### Create a new user repository from this template
-
-Press the "Use this template" button above to create a new repository to store your user configuration.
-
-You can also just clone this repository directly if you do not want to track your user configuration in GitHub.
-
-#### Clone the repository
-
-```shell
-git clone https://github.com/<your_user>/<your_repository> ~/.config/nvim
-```
-
-#### Start Neovim
-
-```shell
-nvim
-```
+After applying the dotfiles, start Neovim once and let lazy.nvim install the
+locked plugins. Use `:checkhealth` to diagnose local runtime dependencies.

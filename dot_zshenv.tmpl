@@ -1,20 +1,24 @@
-if [[ -d "$HOME/.local/bin" ]] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-if [[ -d "$HOME/.cargo/bin" ]] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
-  export PATH="$HOME/.cargo/bin:$PATH"
-fi
-if [[ -d "$HOME/.local/share/mise/shims" ]] && [[ ":$PATH:" != *":$HOME/.local/share/mise/shims:"* ]]; then
-  export PATH="$HOME/.local/share/mise/shims:$PATH"
-fi
+typeset -gaU path
+typeset -a __braden_user_paths
+typeset __braden_path_dir
+
+__braden_user_paths=()
+for __braden_path_dir in \
+  "$HOME/.local/bin" \
+  "$HOME/.local/share/mise/shims" \
+  "$HOME/.bun/bin" \
+  "$HOME/.cargo/bin"
+do
+  [[ -d "$__braden_path_dir" ]] && __braden_user_paths+=("$__braden_path_dir")
+done
+path=("${__braden_user_paths[@]}" $path)
+unset __braden_user_paths __braden_path_dir
+
 ANTIDOTE_HOME="${XDG_CACHE_HOME:-$HOME/Library/Caches}/antidote"
 
-# Record interactive shell startup from the earliest user startup file.
 if [[ -o interactive ]]; then
   typeset -gi __BRADEN_ZSH_HAS_TTY=0
   if [[ -t 0 && -t 1 ]]; then
     __BRADEN_ZSH_HAS_TTY=1
   fi
-  zmodload zsh/datetime 2>/dev/null
-  typeset -gF _ZSH_START_REAL=$EPOCHREALTIME
 fi

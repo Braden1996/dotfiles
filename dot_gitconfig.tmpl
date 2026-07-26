@@ -1,42 +1,67 @@
-{{- $gpgKeyPersonalEmail := get . "gpgKeyPersonalEmail" -}}
-{{- $workGitHubOrg := get . "workGitHubOrg" -}}
+{{- /*
+Signing is configured against a public key FILE, not embedded key material.
+Git accepts a .pub path for user.signingkey when the private half lives in an
+ssh-agent, so the vault stays the only source of truth and `chezmoi status`
+never has to reach for 1Password. `dotfiles-keys sync` writes the file.
+*/ -}}
+{{- $signingKeyFile := joinPath .chezmoi.destDir ".ssh/id_github_sign.pub" -}}
 [alias]
     shit = commit --amend --no-edit
-    fuck = "!f(){ git shit && git push -f; };f"
-    ignore = "!f() { echo \"$1\" >> .gitignore; }; f"
+    fuck = "!f(){ git shit && git push --force-with-lease --force-if-includes; };f"
+    ignore = "!f() { printf '%s\\n' \"$1\" >> .gitignore; }; f"
     ls = log --pretty=format:"%C(yellow)%h\\ %Creset%s%Cblue\\ [%cn]\\%Cred%d" --decorate
     ll = ls --numstat
     last = --no-pager log -1 --oneline --color
-    nuke = "!f(){ git reset --hard && git clean -fd; };f"
     stash-unstaged = stash --keep-index -u
 [user]
-	name = {{ .gitName }}
-	email = {{ .personalEmail }}
-{{- if ne $gpgKeyPersonalEmail "" }}
-  signingkey = {{ $gpgKeyPersonalEmail }}
+	name = {{ .gitName | quote }}
+	email = {{ .personalEmail | quote }}
+{{- if stat $signingKeyFile }}
+	signingkey = ~/.ssh/id_github_sign.pub
 {{- end }}
-{{ if eq .machineType "work" -}}
-{{- if ne $workGitHubOrg "" }}
-[includeIf "hasconfig:remote.*.url:git@github.com:{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
-[includeIf "hasconfig:remote.*.url:ssh://git@github.com/{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
-[includeIf "hasconfig:remote.*.url:https://github.com/{{ $workGitHubOrg }}/**"]
-    path = ~/.attio.gitconfig
-{{- end }}
-{{ end -}}
+{{/*
+Identities are not templated here. Only the vault knows how many exist, and a
+fixed slot per identity is what made "one side project, one work org" a limit
+rather than a choice. `dotfiles-keys sync` writes the file below from the
+vault this machine is configured for; a missing include is a no-op in git, so
+this degrades cleanly before the first sync.
+*/}}
+[include]
+	path = ~/.config/git/identities.gitconfig
 [init]
-	defaultBranch = master
+	defaultBranch = main
 [push]
 	default = current
-{{- if ne $gpgKeyPersonalEmail "" }}
+	autoSetupRemote = true
+{{- if stat $signingKeyFile }}
+{{/*
+SSH signing, not GPG. The private half is only ever in an ssh-agent -- the
+1Password app's agent on personal machines, the OS agent on service-account
+machines -- so the .pub file names the key and Git asks the agent to sign.
+Nothing here works if no agent holds the key, which is the intended failure
+mode: revoking the service account revokes the ability to sign.
+*/}}
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	allowedSignersFile = ~/.ssh/allowed_signers
 [commit]
 	gpgsign = true
-[gpg]
-	program = gpg
 [tag]
-	forceSignAnnotated = true
+	gpgSign = true
 {{- end }}
 [pull]
-	default = current
 	rebase = false
+[core]
+	pager = delta
+[interactive]
+	diffFilter = delta --color-only
+[delta]
+	navigate = true
+	line-numbers = true
+[merge]
+	conflictStyle = zdiff3
+[diff]
+	colorMoved = default
+[include]
+	path = ~/.gitconfig.local

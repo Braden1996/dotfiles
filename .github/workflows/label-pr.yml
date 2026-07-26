@@ -2,15 +2,23 @@ name: Label PR
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: label-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   label:
+    name: Apply labels
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: write # Required for actions/labeler to update PR labels.
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@b8dd2d9be0f68b860e7dae5dae7d772984eacd6d # v6.2.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,28 +1,66 @@
-{{- $machineType := promptChoiceOnce . "machineType" "Machine type (personal/work)" (list "personal" "work") -}}
-{{- $gitName := promptStringOnce . "gitName" "Git author name" -}}
-{{- $personalEmail := promptStringOnce . "personalEmail" "Personal email address" -}}
-{{- $workEmail := "" -}}
-{{- $workGitHubOrg := "" -}}
-{{- if eq $machineType "work" -}}
-{{-   $workEmail = promptStringOnce . "workEmail" "Work email address" -}}
-{{-   $workGitHubOrg = promptStringOnce . "workGitHubOrg" "GitHub organization for work repos (blank to skip remote-based git identity switching)" -}}
-{{- end -}}
-{{- $onePasswordAccount := promptStringOnce . "onePasswordAccount" "1Password account (e.g. my.1password.com)" -}}
-{{- $gpgKeyPersonalEmail := promptStringOnce . "gpgKeyPersonalEmail" (printf "GPG signing key ID for %s (blank if not yet generated)" $personalEmail) -}}
-{{- $gpgKeyWorkEmail := "" -}}
-{{- if eq $machineType "work" -}}
-{{-   $gpgKeyWorkEmail = promptStringOnce . "gpgKeyWorkEmail" (printf "GPG signing key ID for %s (blank if not yet generated)" $workEmail) -}}
-{{- end -}}
+{{/*
+Every prompt defaults to the value already recorded for this machine, so
+`chezmoi init --prompt` -- which re-asks everything, not just the one value you
+came to change -- is non-destructive: press enter to keep what is there. Without
+defaults, running it to set one key silently blanks every other, which quietly
+drops an identity and its conditional gitconfig include.
+*/}}
+{{- $machineType := promptChoiceOnce . "machineType" "Machine type (personal/work)" (list "personal" "work") (or (get . "machineType") "personal") -}}
+{{- $gitName := promptStringOnce . "gitName" "Git author name" (or (get . "gitName") "") -}}
+{{- $personalEmail := promptStringOnce . "personalEmail" "Personal email address" (or (get . "personalEmail") "") -}}
+
+{{/*
+Additional git identities are NOT prompted for and are NOT stored here. They
+live in 1Password, one item each, in the vault this machine is configured for,
+and `dotfiles-keys sync` writes them to ~/.config/git. A fixed slot per identity
+could only ever hold one of each, and machine-local data would put a work email
+on a personal machine. personalEmail below is the default when none matches.
+*/}}
+
+{{/*
+Personal machines run the 1Password desktop app, whose SSH agent holds the
+private keys and never exposes them. Work machines have CLI-only access through
+a service account, so keys are read on demand and loaded into the OS ssh-agent.
+Both backends present Git the same interface: an agent socket, and no private
+key on disk.
+
+The backend is deliberately NOT stored in [data]. Anything written here only
+appears after `chezmoi init`, so a machine that pulls a change and runs a plain
+`chezmoi apply` would render against a config that predates the key. Templates
+derive the backend from machineType instead, which every config already has.
+*/}}
+
+{{/*
+No key material is prompted or stored. `dotfiles-keys sync` writes the public
+halves to ~/.ssh from the vault, and the templates reference those paths rather
+than embedding the keys. Reading them here via onepasswordRead was rejected
+deliberately: every `chezmoi diff`, `status` and `apply` re-renders, so it would
+prompt for biometrics on personal machines, break offline use, and make CI
+unable to render without a vault.
+*/}}
+
+{{/*
+Keys are scoped per machine, so this name ends up in the vault item titles and
+in GitHub's key list. It is prompted rather than inferred: `.chezmoi.hostname`
+resolves from the FQDN and can return something generic and network-dependent
+(on the author's Mac it yields "app"), which would make two machines collide.
+*/}}
+{{- $machineName := promptStringOnce . "machineName" "Short name for this machine, used to scope its GitHub keys" (or (get . "machineName") (output "hostname" "-s" | trim)) -}}
+
+{{/*
+The vault this machine keeps its own keys in, chosen to match its trust
+boundary. A personal machine uses a vault only it can reach. A work machine
+must use the vault shared with the service account, because that is the only
+thing it can read -- and putting personal keys there too would let a leaked
+service account token read them.
+
+An ID works as well as a name here, and avoids trouble with special characters.
+*/}}
+{{- $opVault := promptStringOnce . "opVault" "1Password vault for this machine's GitHub keys (name or ID)" (or (get . "opVault") "") -}}
 
 [data]
   machineType = {{ $machineType | quote }}
+  machineName = {{ $machineName | quote }}
   gitName = {{ $gitName | quote }}
   personalEmail = {{ $personalEmail | quote }}
-  workEmail = {{ $workEmail | quote }}
-  workGitHubOrg = {{ $workGitHubOrg | quote }}
-  onePasswordAccount = {{ $onePasswordAccount | quote }}
-  gpgKeyPersonalEmail = {{ $gpgKeyPersonalEmail | quote }}
-  gpgKeyWorkEmail = {{ $gpgKeyWorkEmail | quote }}
-
-[onepassword]
-  command = "op"
+  opVault = {{ $opVault | quote }}

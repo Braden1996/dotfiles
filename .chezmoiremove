@@ -1,0 +1,20 @@
+{{/*
+Files that chezmoi used to manage and no longer does. Chezmoi never removes a
+target it has stopped managing, so without this they survive forever on every
+machine that applied an earlier revision.
+
+These three are not merely stale, they are harmful. `conf.d` is sourced eagerly
+at every Fish startup, so 50-functions.fish re-defines the same wrappers that
+now live in `functions/` as autoloaded definitions. An eager definition wins
+over autoloading, which means an affected machine silently runs the OLD
+implementations and never picks up any fix made in this repository.
+
+Retired in 6c29182 ("Harden dotfiles reliability and privacy"). The one wrapper
+with no autoloaded replacement, `bun`, has been restored as
+dot_config/fish/functions/bun.fish. The `python` / `python3` wrappers are
+deliberately not restored: safe-chain guards package installation, and the
+install paths are already covered by pip, pip3, pipx, uv and poetry.
+*/ -}}
+.config/fish/conf.d/50-functions.fish
+.config/fish/conf.d/80-prompt-state.fish
+.config/fish/conf.d/zz-startup-timer.fish

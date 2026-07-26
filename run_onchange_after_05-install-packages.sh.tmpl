@@ -1,0 +1,74 @@
+#!/bin/bash
+set -euo pipefail
+
+# Hash the rendered Brewfile, not the template: the package set now differs by
+# profile, and hashing the source would miss a machine changing profile.
+# Brewfile hash: {{ includeTemplate "dot_config/homebrew/Brewfile.tmpl" . | sha256sum }}
+if [[ "{{ .chezmoi.os }}" != "darwin" ]]; then
+  echo "Homebrew dependency installation is macOS-only; skipping."
+  exit 0
+fi
+
+export HOMEBREW_NO_ANALYTICS=1
+export HOMEBREW_REQUIRE_TAP_TRUST=1
+
+find_brew() {
+  if command -v brew >/dev/null 2>&1; then
+    command -v brew
+  elif [[ -x /opt/homebrew/bin/brew ]]; then
+    printf '%s\n' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    printf '%s\n' /usr/local/bin/brew
+  fi
+}
+
+BREW_BIN="$(find_brew || true)"
+BREWFILE="{{ .chezmoi.homeDir }}/.config/homebrew/Brewfile"
+
+if [[ -z "$BREW_BIN" ]]; then
+  echo "Homebrew is unavailable; re-run chezmoi apply after installing it." >&2
+  exit 1
+fi
+if [[ ! -r "$BREWFILE" ]]; then
+  echo "Managed Brewfile is missing: $BREWFILE" >&2
+  exit 1
+fi
+
+# Homebrew taps execute third-party Ruby. Fail closed if a future Brewfile adds
+# a tap without an explicit review here.
+while IFS= read -r tap_name; do
+  case "$tap_name" in
+    withgraphite/tap) ;;
+    *)
+      echo "Refusing unreviewed Homebrew tap: $tap_name" >&2
+      echo "Add it to this hook's trusted-tap allowlist after reviewing it." >&2
+      exit 1
+      ;;
+  esac
+done < <(sed -nE 's/^[[:space:]]*tap[[:space:]]+"([^"]+)".*/\1/p' "$BREWFILE")
+
+"$BREW_BIN" analytics off >/dev/null
+
+if command -v gh >/dev/null 2>&1; then
+  gh config set telemetry disabled
+fi
+
+if command -v sst >/dev/null 2>&1; then
+  SST_TELEMETRY_DISABLED=1 sst telemetry disable
+fi
+
+# Yarn Classic has no telemetry setting. Configure Yarn Berry only when it is
+# the active home-level client, so its opt-out survives outside managed shells.
+if command -v yarn >/dev/null 2>&1 && [[ "$(yarn --version)" =~ ^[2-9][0-9]*\. ]]; then
+  yarn config set --home enableTelemetry 0
+fi
+
+"$BREW_BIN" trust --tap withgraphite/tap
+if "$BREW_BIN" bundle check --file="$BREWFILE" --no-upgrade >/dev/null 2>&1; then
+  echo "Homebrew dependencies are already present."
+  exit 0
+fi
+
+echo "Installing missing Homebrew dependencies..."
+"$BREW_BIN" bundle install --file="$BREWFILE" --no-upgrade
+echo "Homebrew dependency installation complete."

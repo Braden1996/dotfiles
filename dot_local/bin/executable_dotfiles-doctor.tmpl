@@ -1,0 +1,512 @@
+#!/bin/bash
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: dotfiles-doctor [--project PATH]
+
+Run workstation checks without changing managed state. With --project, also
+inspect an Nx workspace's telemetry choice and .cursorignore coverage.
+USAGE
+}
+
+project_path=""
+while (( $# > 0 )); do
+  case "$1" in
+    --project)
+      if (( $# < 2 )); then
+        echo "--project requires a path" >&2
+        exit 2
+      fi
+      project_path="$2"
+      shift
+      ;;
+    --project=*) project_path="${1#*=}" ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+credential_backend={{ ternary "service-account" "desktop" (eq (get . "machineType" | default "personal") "work") | quote }}
+credential_vault={{ get . "opVault" | default "" | quote }}
+# Public keys live on disk, written from the vault by `dotfiles-keys sync`.
+read_if_present() {
+  if [[ -r "$1" ]]; then
+    cat "$1"
+  fi
+}
+recorded_auth_key="$(read_if_present "$HOME/.ssh/id_github_auth.pub")"
+recorded_sign_key="$(read_if_present "$HOME/.ssh/id_github_sign.pub")"
+personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
+service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
+service_account_keychain={{ .credentials.serviceAccountKeychainService | quote }}
+
+ok_count=0
+warn_count=0
+fail_count=0
+
+pass() {
+  printf '[ok] %s\n' "$*"
+  ok_count=$((ok_count + 1))
+}
+
+warn() {
+  printf '[!!] %s\n' "$*"
+  warn_count=$((warn_count + 1))
+}
+
+fail() {
+  printf '[xx] %s\n' "$*"
+  fail_count=$((fail_count + 1))
+}
+
+note() {
+  printf '[--] %s\n' "$*"
+}
+
+indent() {
+  sed 's/^/     /'
+}
+
+check_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    pass "$1 is available"
+  else
+    fail "$1 is missing"
+  fi
+}
+
+check_optional_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    pass "$1 is available"
+  else
+    warn "$1 is not installed (optional)"
+  fi
+}
+
+check_env() {
+  local name="$1"
+  local expected="$2"
+  local actual
+  actual="$(printenv "$name" 2>/dev/null || true)"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "$name is set"
+  else
+    warn "$name is not active in this shell"
+  fi
+}
+
+# Comments differ between what 1Password stores and what ssh-add reports, so
+# compare the algorithm and key body only.
+key_body() {
+  awk '{ print $1 " " $2 }' <<<"$1"
+}
+
+agent_holds_key() {
+  local public_key="$1" loaded
+  [[ -n "$public_key" ]] || return 1
+  loaded="$(ssh-add -L 2>/dev/null)" || return 1
+  grep -Fq -- "$(key_body "$public_key")" <<<"$loaded"
+}
+
+check_agent_key() {
+  local label="$1"
+  local key="$2"
+
+  if [[ -z "$key" ]]; then
+    warn "$label public key is missing from ~/.ssh; run: dotfiles-keys sync"
+  elif agent_holds_key "$key"; then
+    pass "$label key is held by the ssh-agent"
+  else
+    warn "$label key is not loaded; run: dotfiles-keys load"
+  fi
+}
+
+# Sign a throwaway commit exactly the way the managed gitconfig does, so a
+# broken agent surfaces here rather than on the first real commit.
+test_signed_commit() {
+  local key="$1"
+  local email="$2"
+  local repo commit_output allowed_signers
+
+  [[ -n "$key" ]] || return 0
+  agent_holds_key "$key" || return 0
+
+  repo="$sign_test_root/repo"
+  allowed_signers="$sign_test_root/allowed_signers"
+  printf '%s %s\n' "$email" "$key" > "$allowed_signers"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.name "Dotfiles Doctor"
+  git -C "$repo" config user.email "$email"
+  git -C "$repo" config gpg.format ssh
+  git -C "$repo" config user.signingkey "key::$key"
+  git -C "$repo" config gpg.ssh.allowedSignersFile "$allowed_signers"
+  git -C "$repo" config commit.gpgsign true
+  printf 'signing test\n' > "$repo/payload.txt"
+  git -C "$repo" add payload.txt
+
+  if commit_output="$(git -C "$repo" commit --no-verify -S -m "dotfiles doctor signing test" 2>&1)"; then
+    if commit_output="$(git -C "$repo" verify-commit HEAD 2>&1)"; then
+      pass "disposable SSH-signed commit was created and verified"
+    else
+      fail "disposable signed commit could not be verified"
+      printf '%s\n' "$commit_output" | indent
+    fi
+  else
+    fail "disposable SSH-signed commit failed"
+    printf '%s\n' "$commit_output" | indent
+  fi
+}
+
+printf 'Dotfiles health check\n'
+printf '=====================\n\n'
+
+printf 'Core commands\n'
+check_command chezmoi
+check_command git
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  check_command brew
+else
+  check_optional_command brew
+fi
+check_command mise
+check_optional_command cursor
+check_optional_command safe-chain
+
+printf '\nGitHub credentials\n'
+note "backend: $credential_backend, vault: ${credential_vault:-<unset>}"
+check_optional_command op
+
+# Exit status 2 means the agent could not be contacted; 1 only means it is
+# running and currently holds nothing.
+ssh-add -l >/dev/null 2>&1
+if [[ $? -eq 2 ]]; then
+  fail "no ssh-agent is reachable at ${SSH_AUTH_SOCK:-<unset>}"
+else
+  pass "an ssh-agent is reachable"
+  check_agent_key "authentication" "$recorded_auth_key"
+  check_agent_key "signing" "$recorded_sign_key"
+fi
+
+# gitconfig points gpg.ssh.allowedSignersFile here, but chezmoi does not write
+# it: only the vault knows every machine's signing key, so `dotfiles-keys
+# sync-signers` owns it. Without it, verification fails for every commit.
+allowed_signers_file="$HOME/.ssh/allowed_signers"
+if [[ -s "$allowed_signers_file" ]]; then
+  trusted_keys=$(awk '{ print $2 " " $3 }' "$allowed_signers_file" | sort -u | wc -l | tr -d ' ')
+  pass "trust store lists $trusted_keys machine signing key(s)"
+elif [[ -n "$recorded_sign_key" ]]; then
+  warn "no ~/.ssh/allowed_signers; run: dotfiles-keys sync"
+fi
+
+if [[ "$credential_backend" == "service-account" ]]; then
+  # The keychain is preferred over a plaintext file: a 0600 file is readable by
+  # anything running as this user, whereas a keychain item is encrypted at rest
+  # and gated by its own access control.
+  if command -v security >/dev/null 2>&1 &&
+    security find-generic-password -s "$service_account_keychain" -a "$USER" >/dev/null 2>&1; then
+    pass "service account token is in the login keychain"
+    if [[ -e "$service_account_token_file" ]]; then
+      warn "a plaintext token also exists at $service_account_token_file; delete it"
+    fi
+  elif [[ -r "$service_account_token_file" ]]; then
+    # GNU first: BSD stat rejects -c and prints nothing, while GNU stat reads
+    # -f as --file-system and prints a filesystem report before failing.
+    token_mode="$(stat -c '%a' "$service_account_token_file" 2>/dev/null || stat -f '%OLp' "$service_account_token_file" 2>/dev/null)"
+    if [[ "$token_mode" == "600" ]]; then
+      warn "service account token is a plaintext file; prefer: dotfiles-keys store-token"
+    else
+      fail "service account token mode is ${token_mode:-unknown}; expected 0600"
+    fi
+  else
+    fail "no service account token found; run: dotfiles-keys store-token"
+  fi
+fi
+
+# Signing needs no consent now that keys sit in the OS agent, but keep the
+# active test off non-interactive runs (CI, pipes, editor tasks) regardless.
+if [[ -t 0 && -t 1 ]]; then
+  if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
+    test_signed_commit "$recorded_sign_key" "$personal_email"
+    rm -rf -- "$sign_test_root"
+  else
+    fail "could not create a disposable directory for signed-commit checks"
+  fi
+else
+  warn "disposable signed-commit test skipped because no interactive TTY is attached"
+fi
+
+if command -v gpg >/dev/null 2>&1 && gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec:'; then
+  if [[ -z "$recorded_sign_key" ]]; then
+    # This machine used to sign with GPG and now signs with nothing. Say so
+    # loudly: unsigned commits are easy to not notice until a branch is pushed.
+    warn "commit signing is currently OFF: GPG keys exist but Git no longer uses them, and no SSH signing key is recorded"
+    note "Fix with: dotfiles-keys generate && dotfiles-keys publish && dotfiles-keys sync"
+  else
+    note "GPG secret keys are still present but no longer wired into Git; commit signing uses SSH."
+  fi
+fi
+
+printf '\nChezmoi\n'
+if command -v chezmoi >/dev/null 2>&1; then
+  if chezmoi doctor --no-network; then
+    pass "chezmoi doctor passed without network access"
+  else
+    fail "chezmoi doctor reported a problem"
+  fi
+
+  chezmoi_status="$(chezmoi status 2>&1)"
+  if [[ -z "$chezmoi_status" ]]; then
+    pass "managed files match their target state"
+  else
+    warn "chezmoi has unapplied or locally modified targets"
+    printf '%s\n' "$chezmoi_status" | indent
+  fi
+
+  source_dir="$(chezmoi source-path 2>/dev/null || true)"
+  if [[ -n "$source_dir" && -d "$source_dir/.git" ]]; then
+    source_status="$(git -C "$source_dir" status --porcelain 2>/dev/null || true)"
+    if [[ -z "$source_status" ]]; then
+      pass "chezmoi source worktree is clean"
+    else
+      warn "chezmoi source worktree has uncommitted changes"
+      printf '%s\n' "$source_status" | indent
+    fi
+  fi
+fi
+
+printf '\nHomebrew\n'
+brewfile="$HOME/.config/homebrew/Brewfile"
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  pass "Homebrew provisioning is intentionally skipped off macOS"
+elif command -v brew >/dev/null 2>&1 && [[ -r "$brewfile" ]]; then
+  if brew_check="$(brew bundle check --file="$brewfile" --no-upgrade --verbose 2>&1)"; then
+    pass "all managed Homebrew dependencies are installed"
+  else
+    fail "managed Homebrew dependencies are missing"
+    printf '%s\n' "$brew_check" | indent
+  fi
+
+  analytics_state="$(brew analytics state 2>&1 || true)"
+  if printf '%s\n' "$analytics_state" | grep -Eqi 'disabled|destroyed'; then
+    pass "Homebrew analytics are disabled"
+  else
+    warn "Homebrew analytics state could not be confirmed"
+    printf '%s\n' "$analytics_state" | indent
+  fi
+else
+  fail "managed Brewfile is unavailable"
+fi
+
+printf '\nmise\n'
+if command -v mise >/dev/null 2>&1; then
+  if ! mise_missing="$(mise ls --global --missing --no-header 2>&1)"; then
+    fail "mise could not inspect global tools"
+    printf '%s\n' "$mise_missing" | indent
+  elif [[ -n "$mise_missing" ]]; then
+    fail "mise-managed tools are missing"
+    printf '%s\n' "$mise_missing" | indent
+  else
+    pass "all globally managed mise tools are installed"
+  fi
+
+  tracking="$(mise settings get use_versions_host_track 2>/dev/null || true)"
+  if [[ "$tracking" == "false" ]]; then
+    pass "mise install tracking is disabled"
+  else
+    fail "mise use_versions_host_track is not false"
+  fi
+
+  if [[ -r "$HOME/.config/mise/mise.lock" ]]; then
+    pass "mise lockfile is present"
+  else
+    fail "mise lockfile is missing"
+  fi
+fi
+
+printf '\nPrivacy\n'
+{{ range $name, $value := .privacyEnv }}check_env {{ $name | quote }} {{ $value | quote }}
+{{ end }}
+if command -v gt >/dev/null 2>&1; then
+  warn "Graphite exposes no reliable telemetry-status query; GRAPHITE_DISABLE_TELEMETRY is best-effort and normal service metadata may still be logged"
+fi
+if [[ -r "$HOME/.terraformrc" ]] && grep -Eq '^[[:space:]]*disable_checkpoint_signature[[:space:]]*=[[:space:]]*true' "$HOME/.terraformrc"; then
+  pass "Terraform keeps security checks without the anonymous signature"
+else
+  fail "Terraform checkpoint-signature policy is missing"
+fi
+
+printf '\nCursor\n'
+cursor_manifest="$HOME/.config/cursor/extensions.txt"
+cursor_settings="$HOME/Library/Application Support/Cursor/User/settings.json"
+if [[ "$(uname -s)" == "Darwin" && -r "$cursor_settings" ]]; then
+  assert_cursor_setting() {
+    local key="$1"
+    local expected="$2"
+    local description="$3"
+    if grep -Eq "\"${key}\"[[:space:]]*:[[:space:]]*${expected}([[:space:]]*,)?[[:space:]]*$" "$cursor_settings"; then
+      pass "$description"
+    else
+      fail "$description"
+    fi
+  }
+
+  assert_cursor_setting "telemetry.telemetryLevel" '"off"' "Cursor core telemetry is off"
+  assert_cursor_setting "telemetry.feedback.enabled" 'false' "Cursor feedback telemetry is off"
+  assert_cursor_setting "gitlens.telemetry.enabled" 'false' "GitLens telemetry is off"
+  assert_cursor_setting "redhat.telemetry.enabled" 'false' "Red Hat extension telemetry is off"
+  assert_cursor_setting "security.workspace.trust.enabled" 'true' "Cursor workspace trust is enabled"
+  assert_cursor_setting "security.workspace.trust.startupPrompt" '"always"' "Cursor always prompts for workspace trust"
+  assert_cursor_setting "security.workspace.trust.untrustedFiles" '"newWindow"' "Cursor isolates untrusted files in a new window"
+  assert_cursor_setting "extensions.autoCheckUpdates" 'true' "Cursor checks extension updates"
+  assert_cursor_setting "extensions.autoUpdate" 'true' "Cursor automatically updates extensions"
+  assert_cursor_setting "update.mode" '"start"' "Cursor checks application updates at startup"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+  fail "Cursor settings file is missing"
+else
+  pass "Cursor settings checks are intentionally skipped off macOS"
+fi
+
+if command -v cursor >/dev/null 2>&1 && [[ -r "$cursor_manifest" ]]; then
+  cursor_installed="$(cursor --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  cursor_missing=0
+  while IFS= read -r extension || [[ -n "$extension" ]]; do
+    extension="${extension%%#*}"
+    extension="$(printf '%s' "$extension" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [[ -z "$extension" ]] && continue
+    if ! grep -Fxiq -- "$extension" <<<"$cursor_installed"; then
+      warn "Cursor extension is missing: $extension"
+      cursor_missing=$((cursor_missing + 1))
+    fi
+  done < "$cursor_manifest"
+  if (( cursor_missing == 0 )); then
+    pass "all declared Cursor extensions are installed"
+  fi
+elif [[ -r "$cursor_manifest" ]]; then
+  warn "Cursor is unavailable; extension manifest was not checked"
+else
+  fail "Cursor extension manifest is missing"
+fi
+
+if [[ -n "$project_path" ]]; then
+  printf '\nProject privacy\n'
+  if [[ ! -d "$project_path" ]]; then
+    fail "project path is not a directory: $project_path"
+  else
+    project_path="$(cd "$project_path" && pwd -P)"
+    nx_json="$project_path/nx.json"
+    if [[ -r "$nx_json" ]]; then
+      if grep -Eq '"analytics"[[:space:]]*:[[:space:]]*false([[:space:],}]|$)' "$nx_json"; then
+        pass "Nx CLI analytics are disabled in $nx_json"
+      elif grep -Eq '"analytics"[[:space:]]*:[[:space:]]*true([[:space:],}]|$)' "$nx_json"; then
+        fail "Nx CLI analytics are explicitly enabled in $nx_json"
+      else
+        warn "Nx analytics are unset in $nx_json and may prompt on first interactive use"
+      fi
+    else
+      warn "no nx.json found at project root: $project_path"
+    fi
+
+    if [[ -s "$project_path/.cursorignore" ]]; then
+      pass "project has a non-empty .cursorignore"
+    else
+      source_dir="$(chezmoi source-path 2>/dev/null || true)"
+      warn "project lacks a non-empty .cursorignore; review $source_dir/assets/cursorignore.example"
+    fi
+  fi
+fi
+
+printf '\nTerminal integration\n'
+ghostty_config="$HOME/.config/ghostty/config"
+ghostty_bin=""
+if command -v ghostty >/dev/null 2>&1; then
+  ghostty_bin="$(command -v ghostty)"
+elif [[ -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]]; then
+  ghostty_bin=/Applications/Ghostty.app/Contents/MacOS/ghostty
+elif [[ -x "$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+  ghostty_bin="$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ -n "$ghostty_bin" && -r "$ghostty_config" ]]; then
+    if ghostty_validation="$("$ghostty_bin" +validate-config --config-file="$ghostty_config" 2>&1)"; then
+      pass "Ghostty configuration validates"
+    else
+      fail "Ghostty configuration is invalid"
+      printf '%s\n' "$ghostty_validation" | indent
+    fi
+    if grep -Eq '^[[:space:]]*auto-update[[:space:]]*=[[:space:]]*check[[:space:]]*$' "$ghostty_config"; then
+      pass "Ghostty update checks are enabled without background installation"
+    else
+      fail "Ghostty auto-update policy is not set to check"
+    fi
+  else
+    fail "Ghostty binary or managed configuration is missing"
+  fi
+fi
+
+tmux_config="$HOME/.tmux.conf"
+if command -v tmux >/dev/null 2>&1 && [[ -r "$tmux_config" ]]; then
+  pass "tmux is available: $(tmux -V)"
+  if grep -Fq 'set -g default-terminal "tmux-256color"' "$tmux_config"; then
+    pass "tmux advertises tmux-256color"
+  else
+    fail "tmux default-terminal is not tmux-256color"
+  fi
+  if grep -Fq 'xterm-ghostty*:RGB:clipboard' "$tmux_config"; then
+    pass "tmux enables Ghostty RGB and clipboard features"
+  else
+    fail "tmux Ghostty terminal features are missing"
+  fi
+else
+  fail "tmux binary or managed configuration is missing"
+fi
+
+if infocmp tmux-256color >/dev/null 2>&1; then
+  pass "tmux-256color terminfo is available"
+else
+  fail "tmux-256color terminfo is unavailable"
+fi
+
+ghostty_terminfo=""
+if [[ -d /Applications/Ghostty.app/Contents/Resources/terminfo ]]; then
+  ghostty_terminfo=/Applications/Ghostty.app/Contents/Resources/terminfo
+elif [[ -d "$HOME/Applications/Ghostty.app/Contents/Resources/terminfo" ]]; then
+  ghostty_terminfo="$HOME/Applications/Ghostty.app/Contents/Resources/terminfo"
+fi
+if [[ -n "$ghostty_terminfo" ]] && TERMINFO="$ghostty_terminfo" infocmp xterm-ghostty >/dev/null 2>&1; then
+  pass "Ghostty's bundled xterm-ghostty terminfo is readable"
+else
+  warn "xterm-ghostty terminfo was not found outside a Ghostty session"
+fi
+
+printf '\ntmux externals\n'
+for plugin in tpm tmux-sensible tmux; do
+  if [[ -d "$HOME/.tmux/plugins/$plugin" ]]; then
+    pass "tmux plugin is present: $plugin"
+  else
+    fail "tmux plugin is missing: $plugin"
+  fi
+done
+
+printf '\nManual privacy checks\n'
+note "Cursor Privacy Mode is account/UI controlled; verify it in Cursor Settings > Privacy."
+if command -v op >/dev/null 2>&1 && op account list 2>/dev/null | grep -q .; then
+  note "Review Usage Data separately for each configured 1Password account."
+fi
+note "Review Docker Desktop's usage-statistics setting; do not track its mutable settings store."
+note "Review macOS Privacy & Security > Analytics & Improvements after OS migrations."
+
+printf '\nSummary: %d ok, %d warning(s), %d failure(s)\n' "$ok_count" "$warn_count" "$fail_count"
+if (( fail_count > 0 )); then
+  exit 1
+fi

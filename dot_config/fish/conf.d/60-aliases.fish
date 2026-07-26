@@ -31,7 +31,7 @@ if command -q git
     alias gl='git pull'
     alias gpr='git pull --rebase'
     alias gp='git push'
-    alias gpf='git push --force-with-lease'
+    alias gpf='git push --force-with-lease --force-if-includes'
     alias grh='git reset'
     alias grhh='git reset --hard'
     alias grs='git restore'

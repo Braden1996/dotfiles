@@ -1,0 +1,1002 @@
+{{- /* Derived from machineType, never from a persisted key that a stale
+       machine-local config would be missing. See .chezmoi.toml.tmpl. */ -}}
+{{- $backend := ternary "service-account" "desktop" (eq (or (get . "machineType") "personal") "work") -}}
+{{- $vault := or (get . "opVault") "" -}}
+{{- /* Prompted, not inferred: see the machineName comment in .chezmoi.toml.tmpl. */ -}}
+{{- $machine := or (get . "machineName") "unnamed" -}}
+#!/bin/bash
+set -uo pipefail
+
+# Manage the GitHub credentials this machine uses, without ever writing a
+# private key to disk.
+#
+#   desktop         The 1Password app holds the keys and its agent signs with
+#                   them. Nothing to load; nothing to expire.
+#   service-account The app is not installed. Keys are read from the shared
+#                   vault on demand and added to the OS ssh-agent with a
+#                   lifetime, so a revoked service account takes effect at the
+#                   next load instead of leaving a usable key behind.
+#
+# Keys are per-machine. One shared pair would make revocation all-or-nothing
+# and leave signatures unattributable: you could not tell which machine signed
+# a commit, nor distrust one machine without rotating every machine. Scoping
+# the vault items by hostname makes revoking a machine a single GitHub key
+# deletion.
+
+readonly BACKEND={{ $backend | quote }}
+readonly VAULT={{ $vault | quote }}
+# Baked at render time so the item name cannot drift if the running hostname
+# changes underneath a machine that already published its keys.
+readonly MACHINE={{ $machine | quote }}
+readonly AUTH_ITEM={{ printf "%s (%s)" .credentials.authItemPrefix $machine | quote }}
+readonly SIGN_ITEM={{ printf "%s (%s)" .credentials.signItemPrefix $machine | quote }}
+readonly SIGN_ITEM_PREFIX={{ .credentials.signItemPrefix | quote }}
+readonly IDENTITY_PREFIX={{ .credentials.identityItemPrefix | quote }}
+readonly IDENTITY_EMAIL_FIELD={{ .credentials.identityEmailField | quote }}
+readonly IDENTITY_SCOPE_FIELD={{ .credentials.identityScopeField | quote }}
+readonly IDENTITY_INCLUDE={{ joinPath .chezmoi.homeDir .credentials.identityIncludeFile | quote }}
+readonly IDENTITY_DIR={{ joinPath .chezmoi.homeDir .credentials.identityDir | quote }}
+readonly GIT_NAME={{ .gitName | quote }}
+readonly DEFAULT_EMAIL={{ .personalEmail | quote }}
+readonly TOKEN_ITEM={{ .credentials.tokenItem | quote }}
+readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
+readonly TOKEN_FIELD={{ .credentials.tokenField | quote }}
+readonly KEY_LIFETIME={{ .credentials.agentKeyLifetime | quote }}
+readonly KEYCHAIN_SERVICE={{ .credentials.serviceAccountKeychainService | quote }}
+readonly TOKEN_FILE={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
+readonly SSH_DIR={{ joinPath .chezmoi.homeDir ".ssh" | quote }}
+readonly ALLOWED_SIGNERS={{ joinPath .chezmoi.homeDir ".ssh/allowed_signers" | quote }}
+readonly AUTH_KEY_FILE={{ joinPath .chezmoi.homeDir ".ssh/id_github_auth.pub" | quote }}
+readonly SIGN_KEY_FILE={{ joinPath .chezmoi.homeDir ".ssh/id_github_sign.pub" | quote }}
+
+# Public halves live on disk, written from the vault by `sync`. Chezmoi does not
+# template them: key material has one source of truth, and reading the vault at
+# render time would make every `chezmoi status` prompt for biometrics.
+recorded_key() {
+  [[ -r "$1" ]] && cat "$1"
+}
+
+# Every address this machine commits as: the default plus every identity in the
+# vault. Read at runtime rather than baked in, because the identity list is the
+# vault's to know -- baking it would let the trust store drift from the
+# identities actually in use the moment one is added.
+principals() {
+  local emails
+  emails="$DEFAULT_EMAIL"
+  local email
+  while IFS= read -r email; do
+    [[ -n "$email" ]] && emails+=$'\n'"$email"
+  done < <(identity_emails)
+  printf '%s\n' "$emails" | awk 'NF && !seen[$0]++'
+}
+
+# 1Password stores SSH keys in its own representation; this query asks for the
+# OpenSSH encoding that ssh-add understands.
+readonly PRIVATE_REFERENCE_SUFFIX='private key?ssh-format=openssh'
+
+usage() {
+  cat <<'USAGE'
+Usage: dotfiles-keys <command>
+
+Commands:
+  setup         Guided first run: check prerequisites, then generate, publish, sync
+  store-token   Store the service account token in the macOS keychain (work only)
+  status        Report the credential backend, agent, and which keys are usable
+  generate      Create this machine's SSH keys inside 1Password
+  publish       Add this machine's public keys to your GitHub account
+  sync          Write public keys, git identities and the trust store from the vault
+  sync-signers  Rebuild only ~/.ssh/allowed_signers from every machine in the vault
+  identity-add  Add a git identity: identity-add <slug> <email> <owner/** | owner/repo>
+  load          Read this machine's keys from 1Password into the ssh-agent
+  unload        Drop the loaded keys from the ssh-agent
+  token         Print the GitHub token from the vault, for GH_TOKEN
+
+Keys are per-machine, named for this host, so revoking one machine is a single
+GitHub key deletion. Private keys are never written to disk: `generate` creates
+them inside 1Password and `load` streams them straight into the agent.
+USAGE
+}
+
+pass() { printf '[ok] %s\n' "$*"; }
+warn() { printf '[!!] %s\n' "$*"; }
+fail() { printf '[xx] %s\n' "$*" >&2; }
+note() { printf '[--] %s\n' "$*"; }
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "$1 is required but not installed"
+    return 1
+  fi
+}
+
+# GNU first: BSD stat rejects -c outright and prints nothing, whereas GNU stat
+# reads -f as --file-system and prints a filesystem report to stdout while
+# exiting non-zero, which would poison a BSD-first probe with junk.
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null
+}
+
+require_vault() {
+  if [[ -z "$VAULT" ]]; then
+    fail "no 1Password vault is configured; run: chezmoi init --prompt"
+    return 1
+  fi
+}
+
+# Resolve the service account token, preferring the strongest store available.
+# A 0600 file is readable by anything running as this user; a Keychain item is
+# encrypted at rest and gated by the item's own access control. The file is
+# kept as a fallback so non-macOS hosts still work.
+service_account_token() {
+  if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+    printf '%s' "$OP_SERVICE_ACCOUNT_TOKEN"
+    return 0
+  fi
+  if command -v security >/dev/null 2>&1; then
+    local from_keychain
+    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null)"; then
+      printf '%s' "$from_keychain"
+      return 0
+    fi
+  fi
+  if [[ -r "$TOKEN_FILE" ]]; then
+    tr -d '[:space:]' <"$TOKEN_FILE"
+    return 0
+  fi
+  return 1
+}
+
+# Which store answered, for status and doctor output. Never prints the token.
+token_source() {
+  if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+    printf 'environment'
+  elif command -v security >/dev/null 2>&1 &&
+    security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$USER" >/dev/null 2>&1; then
+    printf 'keychain'
+  elif [[ -r "$TOKEN_FILE" ]]; then
+    printf 'file'
+  else
+    printf 'none'
+  fi
+}
+
+# Supply the service account token to a single op invocation rather than
+# exporting it into the environment of every process in the session.
+op_run() {
+  if [[ "$BACKEND" == "service-account" ]]; then
+    local token
+    # Diagnostics stay on stderr: `dotfiles-keys token` is captured as $(...)
+    # by callers, and advice printed on stdout becomes the token.
+    if ! token="$(service_account_token)"; then
+      fail "no 1Password service account token found"
+      fail "Store one with: dotfiles-keys store-token"
+      return 1
+    fi
+    token="${token//[$'\n\r\t ']/}"
+    if [[ -z "$token" ]]; then
+      fail "the stored service account token is empty"
+      return 1
+    fi
+    OP_SERVICE_ACCOUNT_TOKEN="$token" op "$@"
+  else
+    op "$@"
+  fi
+}
+
+# Secret references reject characters that are perfectly legal in a vault or
+# item name -- '<' among them, which a name like "Braden<>Work" contains. IDs
+# are alphanumeric, so resolve names to IDs once and build references from
+# those. This makes the script indifferent to whatever the vault is called.
+VAULT_ID=""
+resolve_vault_id() {
+  if [[ -n "$VAULT_ID" ]]; then
+    printf '%s' "$VAULT_ID"
+    return 0
+  fi
+  local id
+  id="$(op_run vault get "$VAULT" --format json 2>/dev/null | jq -r '.id // empty')"
+  if [[ -z "$id" ]]; then
+    fail "could not resolve the vault: $VAULT"
+    return 1
+  fi
+  VAULT_ID="$id"
+  printf '%s' "$VAULT_ID"
+}
+
+resolve_item_id() {
+  local vault_id
+  vault_id="$(resolve_vault_id)" || return 1
+  op_run item get "$1" --vault "$vault_id" --format json 2>/dev/null |
+    jq -r '.id // empty'
+}
+
+reference() {
+  local vault_id
+  vault_id="$(resolve_vault_id)" || return 1
+  printf 'op://%s/%s/%s' "$vault_id" "$1" "$2"
+}
+
+# Read a field by label rather than through a secret reference: no reference
+# parsing, so no character restrictions on the item title either.
+read_public_key() {
+  local vault_id
+  vault_id="$(resolve_vault_id)" || return 1
+  op_run item get "$1" --vault "$vault_id" --fields label="$PUBLIC_FIELD" 2>/dev/null
+}
+
+# Compare against the agent by key body only: comments differ between what
+# 1Password stores and what ssh-add reports. A key missing its base64 body
+# would otherwise reduce to a bare algorithm name and match every key of that
+# type, so require both fields.
+key_body() {
+  awk 'NF >= 2 { print $1 " " $2 }' <<<"$1"
+}
+
+agent_holds_key() {
+  local public_key="$1" body loaded
+  [[ -n "$public_key" ]] || return 1
+  body="$(key_body "$public_key")"
+  [[ -n "$body" ]] || return 1
+  loaded="$(ssh-add -L 2>/dev/null)" || return 1
+  grep -Fq -- "$body" <<<"$loaded"
+}
+
+agent_available() {
+  # A missing ssh-add is not a reachable agent. Check the binary first, then
+  # distinguish "cannot contact the agent" (2) from "agent holds nothing" (1).
+  command -v ssh-add >/dev/null 2>&1 || return 1
+  local status=0
+  ssh-add -l >/dev/null 2>&1 || status=$?
+  [[ "$status" -ne 2 ]]
+}
+
+cmd_status() {
+  local exit_code=0
+
+  printf 'Credential backend\n'
+  note "backend: $BACKEND"
+  note "machine: $MACHINE"
+  note "vault:   ${VAULT:-<unset>}"
+  if [[ -r "$ALLOWED_SIGNERS" ]]; then
+    note "trusted signing keys: $(awk '{ print $2 " " $3 }' "$ALLOWED_SIGNERS" | sort -u | wc -l | tr -d ' ')"
+  else
+    warn "no trust store yet; run: dotfiles-keys sync"
+  fi
+
+  printf '\nTooling\n'
+  if require_command op; then
+    pass "op is available"
+  else
+    exit_code=1
+  fi
+  if require_command ssh-add; then
+    pass "ssh-add is available"
+  else
+    exit_code=1
+  fi
+  if command -v gh >/dev/null 2>&1; then
+    pass "gh is available"
+  else
+    warn "gh is not installed; publishing public keys will not work"
+  fi
+
+  printf '\nAgent\n'
+  if agent_available; then
+    pass "an ssh-agent is reachable at ${SSH_AUTH_SOCK:-<unset>}"
+  else
+    fail "no ssh-agent is reachable"
+    exit_code=1
+  fi
+
+  if [[ "$BACKEND" == "service-account" ]]; then
+    # A durable on-disk key defeats the entire arrangement: revoking the
+    # service account cannot reach it, so the machine keeps its GitHub access
+    # forever. Treat it as an error, not a compatibility affordance.
+    local stray
+    for stray in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
+      if [[ -f "$stray" ]]; then
+        fail "a private key is on disk and would survive revocation: $stray"
+        note "Remove it and delete the matching key from GitHub, or this machine"
+        note "keeps access after the service account is revoked."
+        exit_code=1
+      fi
+    done
+
+    case "$(token_source)" in
+      keychain) pass "service account token is in the login keychain" ;;
+      environment) warn "service account token is coming from the environment" ;;
+      file)
+        local mode
+        mode="$(file_mode "$TOKEN_FILE")"
+        warn "service account token is a plaintext file (mode ${mode:-unknown})"
+        note "Prefer the keychain: dotfiles-keys store-token"
+        ;;
+      *)
+        fail "no service account token found; run: dotfiles-keys store-token"
+        exit_code=1
+        ;;
+    esac
+  fi
+
+  printf '\nLocal public keys\n'
+  local auth_key sign_key
+  auth_key="$(recorded_key "$AUTH_KEY_FILE")"
+  sign_key="$(recorded_key "$SIGN_KEY_FILE")"
+  if [[ -n "$auth_key" ]]; then
+    pass "authentication public key is present"
+  else
+    warn "no authentication public key; run: dotfiles-keys sync"
+  fi
+  if [[ -n "$sign_key" ]]; then
+    pass "signing public key is present"
+  else
+    warn "no signing public key; run: dotfiles-keys sync"
+  fi
+
+  printf '\nKeys usable right now\n'
+  if agent_holds_key "$auth_key"; then
+    pass "the agent holds the authentication key"
+  else
+    warn "the agent does not hold the authentication key; run: dotfiles-keys load"
+  fi
+  if agent_holds_key "$sign_key"; then
+    pass "the agent holds the signing key"
+  else
+    warn "the agent does not hold the signing key; run: dotfiles-keys load"
+  fi
+
+  return "$exit_code"
+}
+
+# Everything `setup` needs before it starts changing anything. Each failure
+# names the exact fix: a half-finished credential setup is worse than one that
+# refused to start, because the failure surfaces later as an unexplained
+# permission denied.
+setup_preflight() {
+  local ready=0
+
+  require_command op || ready=1
+  require_command jq || ready=1
+  require_command ssh-add || ready=1
+  if ! command -v gh >/dev/null 2>&1; then
+    fail "gh is required to publish the public keys to GitHub"
+    ready=1
+  fi
+  require_vault || ready=1
+  (( ready == 0 )) || return 1
+
+  # An unlocked app with a known account still needs a signed-in session.
+  # Trigger it here rather than making the user re-run setup after doing it by
+  # hand -- op signin raises the app's own prompt, so nothing is typed here.
+  if [[ "$BACKEND" == "desktop" ]] && ! op whoami >/dev/null 2>&1; then
+    if [[ -n "$(op account list 2>/dev/null)" ]] && [[ -t 0 ]]; then
+      note "Not signed in. Approve the 1Password prompt..."
+      op signin >/dev/null 2>&1 || true
+    fi
+  fi
+
+  local whoami_output
+  if ! whoami_output="$(op_run whoami 2>&1)"; then
+    fail "1Password CLI is not authenticated"
+    # Show op's own message. Ours names the usual cause; only op knows the
+    # actual one, and hiding it makes this the hardest step to debug.
+    printf '%s\n' "$whoami_output" | sed 's/^/     /' >&2
+    if [[ "$BACKEND" == "desktop" ]]; then
+      # Distinguish "no account" from "account known but not signed in": the
+      # fixes are completely different, and conflating them sends you to a
+      # setting that is already switched on.
+      if op account list >/dev/null 2>&1 && [[ -n "$(op account list 2>/dev/null)" ]]; then
+        note "The app integration is working -- op can see your account -- but"
+        note "this session is not signed in. Run: op signin"
+        note "If that fails, quit and reopen 1Password: the app validates the"
+        note "op binary at startup and will not have seen a CLI installed since."
+      else
+        note "op cannot see any account. Turn on 1Password > Settings >"
+        note "Developer > 'Integrate with 1Password CLI', and unlock the app."
+      fi
+      note "Binary in use: $(command -v op 2>/dev/null || echo 'op not found')"
+    else
+      note "Store the service account token with: dotfiles-keys store-token"
+    fi
+    return 1
+  fi
+  pass "1Password CLI is authenticated"
+
+  if ! op_run vault get "$VAULT" >/dev/null 2>&1; then
+    fail "cannot read the vault: $VAULT"
+    note "Check the name with 'op vault list'. Its ID works too, and avoids"
+    note "any trouble with special characters in the name."
+    return 1
+  fi
+  pass "vault is reachable: $VAULT"
+
+  if ! gh auth status >/dev/null 2>&1; then
+    fail "gh is not authenticated; run: gh auth login"
+    return 1
+  fi
+  pass "gh is authenticated"
+
+  # Without this scope `publish` gets half way: the auth key lands on GitHub and
+  # the signing key does not. Offer to fix it now rather than failing later.
+  if ! gh auth status 2>&1 | grep -q 'admin:ssh_signing_key'; then
+    warn "gh lacks the admin:ssh_signing_key scope, so the signing key cannot be added"
+    if [[ -t 0 ]]; then
+      local reply
+      read -r -p "     Run 'gh auth refresh -h github.com -s admin:ssh_signing_key' now? [y/N] " reply
+      if [[ "$reply" =~ ^[Yy] ]]; then
+        gh auth refresh -h github.com -s admin:ssh_signing_key || {
+          fail "the scope refresh failed"
+          return 1
+        }
+        pass "gh now holds the signing-key scope"
+      else
+        note "Skipped. The signing key will not be published."
+      fi
+    else
+      note "Fix with: gh auth refresh -h github.com -s admin:ssh_signing_key"
+    fi
+  fi
+
+  if ! agent_available; then
+    warn "no ssh-agent is reachable; keys can be created but not used yet"
+  fi
+}
+
+# The whole first-run flow in the right order, so nobody has to remember it.
+cmd_setup() {
+  printf 'Checking prerequisites\n'
+  setup_preflight || return 1
+
+  printf '\nCreating this machine'"'"'s keys in 1Password\n'
+  cmd_generate || return 1
+
+  printf '\nPublishing public keys to GitHub\n'
+  cmd_publish || return 1
+
+  printf '\nWriting local key files and the trust store\n'
+  cmd_sync || return 1
+
+  printf '\nLoading keys into the ssh-agent\n'
+  cmd_load || return 1
+
+  cat <<'DONE'
+
+Done. One step left, because it changes managed files:
+
+  chezmoi diff        # review, this machine may have unrelated pending changes
+  chezmoi apply       # picks up the new key files for Git and SSH
+
+Then check it worked:
+
+  dotfiles-keys status
+  ssh -T git@github.com
+
+Nothing else needs adding to the vault by hand. The only optional extra is a
+GitHub token for `gh` on machines that cannot log in interactively -- see
+"The GitHub token" in the README; GitHub does not allow creating one via API.
+DONE
+}
+
+cmd_generate() {
+  require_command op || return 1
+  require_vault || return 1
+
+  if [[ "$BACKEND" == "service-account" ]]; then
+    fail "refusing to create items with a service account"
+    note "The service account is read-only by design. Run this on a personal"
+    note "machine signed in to the 1Password app, then 'load' here."
+    return 1
+  fi
+
+  local item probe probe_status
+  for item in "$AUTH_ITEM" "$SIGN_ITEM"; do
+    # Distinguish "no such item" from "the lookup itself failed". Treating any
+    # non-zero exit as absence would create a second item with the same title
+    # on a network blip or an auth prompt, and a duplicate title makes every
+    # later `op read` ambiguous.
+    probe_status=0
+    probe="$(op_run item get "$item" --vault "$VAULT" 2>&1)" || probe_status=$?
+    if [[ "$probe_status" -eq 0 ]]; then
+      pass "already exists in $VAULT: $item"
+      continue
+    fi
+    if ! grep -qiE "isn't an item|not found|no item matches" <<<"$probe"; then
+      fail "could not determine whether $item exists in $VAULT"
+      printf '%s\n' "$probe" | sed 's/^/     /' >&2
+      return 1
+    fi
+    printf 'Creating %s in %s...\n' "$item" "$VAULT"
+    # 1Password generates the key itself, so the private half is created inside
+    # the vault and never exists on this filesystem.
+    if op item create \
+      --category ssh \
+      --title "$item" \
+      --vault "$VAULT" \
+      --ssh-generate-key ed25519 >/dev/null; then
+      pass "created $item"
+    else
+      fail "could not create $item"
+      return 1
+    fi
+  done
+
+  note "Next: dotfiles-keys publish, then dotfiles-keys sync"
+}
+
+cmd_publish() {
+  require_command op || return 1
+  require_command gh || return 1
+  require_vault || return 1
+
+  if ! gh auth status >/dev/null 2>&1; then
+    fail "gh is not authenticated; run: gh auth login"
+    return 1
+  fi
+
+  local hostname
+  hostname="$(uname -n)"
+
+  publish_one() {
+    local item="$1" key_type="$2" title="$3"
+    local public_key key_file exit_code=0
+
+    public_key="$(read_public_key "$item")"
+    if [[ -z "$public_key" ]]; then
+      fail "could not read the public key for $item from $VAULT"
+      return 1
+    fi
+
+    # Public keys are not secrets, but gh wants a file rather than stdin.
+    key_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-keys.XXXXXX")" || return 1
+    printf '%s\n' "$public_key" >"$key_file"
+    if gh ssh-key add "$key_file" --type "$key_type" --title "$title"; then
+      pass "added $key_type key to GitHub: $title"
+    else
+      fail "could not add the $key_type key; it may already be present"
+      exit_code=1
+    fi
+    rm -f -- "$key_file"
+    return "$exit_code"
+  }
+
+  # Report a real exit status: a caller scripting this needs to know the keys
+  # did not reach GitHub, and a silent success here means unverified commits
+  # and a machine that cannot authenticate.
+  local exit_code=0
+  publish_one "$AUTH_ITEM" authentication "$AUTH_ITEM ($hostname)" || exit_code=1
+  publish_one "$SIGN_ITEM" signing "$SIGN_ITEM ($hostname)" || {
+    exit_code=1
+    note "Signing keys need the admin:ssh_signing_key scope."
+    note "Run: gh auth refresh -h github.com -s admin:ssh_signing_key"
+  }
+  return "$exit_code"
+}
+
+# Write a public key to disk atomically. These are not secrets, but a partially
+# written key would make Git and SSH fail in ways that look like a bad key.
+write_public_key() {
+  local destination="$1" contents="$2" staged
+  staged="$(mktemp "${TMPDIR:-/tmp}/dotfiles-key.XXXXXX")" || return 1
+  printf '%s\n' "$contents" >"$staged"
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+  mv -- "$staged" "$destination"
+  chmod 644 "$destination"
+}
+
+# Bring every locally derived artefact back in line with the vault: this
+# machine's two public keys, and the trust store covering all machines.
+cmd_sync() {
+  require_command op || return 1
+  require_vault || return 1
+
+  local auth_key sign_key
+  auth_key="$(read_public_key "$AUTH_ITEM")"
+  sign_key="$(read_public_key "$SIGN_ITEM")"
+
+  if [[ -z "$auth_key" || -z "$sign_key" ]]; then
+    fail "could not read this machine's public keys from $VAULT"
+    note "Expected items: '$AUTH_ITEM' and '$SIGN_ITEM'."
+    note "Run 'dotfiles-keys generate' on this machine first."
+    return 1
+  fi
+
+  write_public_key "$AUTH_KEY_FILE" "$auth_key" || return 1
+  write_public_key "$SIGN_KEY_FILE" "$sign_key" || return 1
+  pass "wrote this machine's public keys to $SSH_DIR"
+
+  cmd_sync_identities || return 1
+  cmd_sync_signers || return 1
+
+  note "Run 'chezmoi apply' so Git and SSH pick the new key files up."
+}
+
+# Identity items are read from the vault this machine is configured for, and
+# only that vault. That is the whole scoping mechanism: a work machine cannot
+# see a personal identity because it cannot read the vault holding it.
+identity_rows() {
+  require_vault || return 1
+  local vault_id items
+  vault_id="$(resolve_vault_id)" || return 1
+  if ! items="$(op_run item list --vault "$vault_id" --format json 2>/dev/null)"; then
+    fail "could not list items in $VAULT"
+    return 1
+  fi
+  # id<TAB>slug, sorted by slug so overlapping scopes resolve deterministically:
+  # when two includeIf rules match, git applies the last one.
+  jq -r --arg prefix "$IDENTITY_PREFIX" '
+    .[]
+    | select(.title | startswith($prefix + " ("))
+    | "\(.id)\t\(.title | sub("^" + $prefix + " \\("; "") | sub("\\)$"; ""))"
+  ' <<<"$items" | sort -t"$(printf '\t')" -k2
+}
+
+identity_field() {
+  local vault_id
+  vault_id="$(resolve_vault_id)" || return 1
+  op_run item get "$1" --vault "$vault_id" --fields label="$2" 2>/dev/null
+}
+
+identity_emails() {
+  local item_id slug
+  while IFS="$(printf '\t')" read -r item_id slug; do
+    [[ -n "$item_id" ]] || continue
+    identity_field "$item_id" "$IDENTITY_EMAIL_FIELD"
+  done < <(identity_rows 2>/dev/null)
+}
+
+# A scope is either "owner/**" for a whole org or "owner/repo" for one repo.
+# Emit every URL form git might see, and for an exact repo emit both the bare
+# and .git-suffixed variants -- a clone made without the suffix does not match
+# a suffixed pattern, which silently drops the identity.
+emit_scope_rules() {
+  local scope="$1" target="$2" host="github.com"
+  local prefixes=("git@$host:" "ssh://git@$host/" "https://$host/")
+  local suffixes=("")
+  case "$scope" in
+    */\*\*) ;;
+    *) suffixes=("" ".git") ;;
+  esac
+  local prefix suffix
+  for prefix in "${prefixes[@]}"; do
+    for suffix in "${suffixes[@]}"; do
+      printf '[includeIf "hasconfig:remote.*.url:%s%s%s"]\n\tpath = %s\n' \
+        "$prefix" "$scope" "$suffix" "$target"
+    done
+  done
+}
+
+cmd_sync_identities() {
+  require_command op || return 1
+  require_command jq || return 1
+  require_vault || return 1
+
+  local rows
+  rows="$(identity_rows)" || return 1
+
+  local staged_include staged_dir
+  staged_include="$(mktemp "${TMPDIR:-/tmp}/identities.XXXXXX")" || return 1
+  staged_dir="$(mktemp -d "${TMPDIR:-/tmp}/identity-dir.XXXXXX")" || return 1
+
+  {
+    printf '# Generated by dotfiles-keys sync. Edits are lost.\n'
+    printf '# Identities come from the 1Password vault: %s\n\n' "$VAULT"
+  } >"$staged_include"
+
+  local item_id slug email scope count=0
+  while IFS="$(printf '\t')" read -r item_id slug; do
+    [[ -n "$item_id" ]] || continue
+    email="$(identity_field "$item_id" "$IDENTITY_EMAIL_FIELD")"
+    scope="$(identity_field "$item_id" "$IDENTITY_SCOPE_FIELD")"
+    if [[ -z "$email" || -z "$scope" ]]; then
+      warn "skipping identity '$slug': needs both $IDENTITY_EMAIL_FIELD and $IDENTITY_SCOPE_FIELD"
+      continue
+    fi
+    printf '[user]\n\tname = %s\n\temail = %s\n' "$GIT_NAME" "$email" \
+      >"$staged_dir/$slug.gitconfig"
+    # One item may carry several scopes, one per line.
+    local one
+    while IFS= read -r one; do
+      one="${one//[[:space:]]/}"
+      [[ -n "$one" ]] || continue
+      emit_scope_rules "$one" "$IDENTITY_DIR/$slug.gitconfig" >>"$staged_include"
+    done <<<"$scope"
+    count=$((count + 1))
+  done <<<"$rows"
+
+  # Replace wholesale so an identity removed from the vault disappears here too.
+  rm -rf -- "$IDENTITY_DIR"
+  mkdir -p "$IDENTITY_DIR" "$(dirname "$IDENTITY_INCLUDE")"
+  if ((count > 0)); then
+    cp -- "$staged_dir"/*.gitconfig "$IDENTITY_DIR/"
+  fi
+  mv -- "$staged_include" "$IDENTITY_INCLUDE"
+  rm -rf -- "$staged_dir"
+  chmod 600 "$IDENTITY_INCLUDE"
+
+  pass "wrote $count git identity(ies) from $VAULT"
+}
+
+cmd_identity_add() {
+  require_command op || return 1
+  require_vault || return 1
+
+  local slug="${1:-}" email="${2:-}" scope="${3:-}"
+  if [[ -z "$slug" || -z "$email" || -z "$scope" ]]; then
+    fail "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+    return 1
+  fi
+  if [[ "$BACKEND" == "service-account" ]]; then
+    fail "refusing to create items with a read-only service account"
+    note "Add the identity from a machine signed in to the 1Password app."
+    return 1
+  fi
+
+  if op_run item create \
+    --category "Secure Note" \
+    --title "$IDENTITY_PREFIX ($slug)" \
+    --vault "$VAULT" \
+    "$IDENTITY_EMAIL_FIELD=$email" \
+    "$IDENTITY_SCOPE_FIELD=$scope" >/dev/null; then
+    pass "created $IDENTITY_PREFIX ($slug) in $VAULT"
+    cmd_sync_identities
+  else
+    fail "could not create the identity item"
+    return 1
+  fi
+}
+
+# The vault is the only place that knows how many machines exist, so the trust
+# store is rebuilt from it rather than templated from this machine's data.
+# Otherwise a commit signed on one machine would not verify on another.
+cmd_sync_signers() {
+  require_command op || return 1
+  require_command jq || return 1
+
+  # Each machine keeps its keys in the vault that matches its own trust
+  # boundary: a personal machine in a vault only it can reach, a work machine in
+  # the vault shared with the service account. Putting personal keys in the
+  # shared vault would let a leaked service account token read them, which is
+  # exactly what per-machine keys exist to prevent.
+  #
+  # The consequence is an asymmetric trust store. A desktop machine can
+  # enumerate every vault it can read, so it trusts every machine. A service
+  # account can only enumerate the vault it was granted, so a work machine
+  # trusts the machines in that vault alone. GitHub still shows every signature
+  # as Verified either way; only local `git verify-commit` is narrower.
+  local list_args=(item list --categories "SSH Key" --format json)
+  if [[ "$BACKEND" == "service-account" ]]; then
+    require_vault || return 1
+    list_args+=(--vault "$VAULT")
+  fi
+
+  local items
+  if ! items="$(op_run "${list_args[@]}" 2>/dev/null)"; then
+    fail "could not list SSH key items in 1Password"
+    return 1
+  fi
+
+  # id<TAB>title, so the read below works regardless of which vault it is in.
+  local rows
+  rows="$(jq -r --arg prefix "$SIGN_ITEM_PREFIX" \
+    '.[] | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' <<<"$items" |
+    sort -t"$(printf '\t')" -k2)"
+
+  if [[ -z "$rows" ]]; then
+    fail "no items named '$SIGN_ITEM_PREFIX (...)' are readable"
+    note "Run 'dotfiles-keys generate' on at least one machine first."
+    return 1
+  fi
+
+  local principal_list
+  principal_list="$(principals)"
+  if [[ -z "$principal_list" ]]; then
+    fail "no principals: neither a default email nor any identity is readable"
+    return 1
+  fi
+
+  local staged
+  staged="$(mktemp "${TMPDIR:-/tmp}/allowed-signers.XXXXXX")" || return 1
+
+  local item_id title key principal count=0
+  while IFS="$(printf '\t')" read -r item_id title; do
+    [[ -n "$item_id" ]] || continue
+    if [[ "$BACKEND" == "service-account" ]]; then
+      key="$(op_run item get "$item_id" --vault "$VAULT" --fields label="$PUBLIC_FIELD" 2>/dev/null)"
+    else
+      key="$(op_run item get "$item_id" --fields label="$PUBLIC_FIELD" 2>/dev/null)"
+    fi
+    if [[ -z "$key" ]]; then
+      warn "skipping $title: its public key could not be read"
+      continue
+    fi
+    while IFS= read -r principal; do
+      [[ -n "$principal" ]] || continue
+      printf '%s %s\n' "$principal" "$key" >>"$staged"
+    done < <(printf '%s\n' "$principal_list")
+    count=$((count + 1))
+  done <<<"$rows"
+
+  if ((count == 0)); then
+    fail "no signing keys could be read; leaving $ALLOWED_SIGNERS untouched"
+    rm -f -- "$staged"
+    return 1
+  fi
+
+  # Replace atomically: a half-written trust store would make every signature
+  # fail to verify.
+  mkdir -p "$(dirname "$ALLOWED_SIGNERS")"
+  chmod 700 "$(dirname "$ALLOWED_SIGNERS")"
+  mv -- "$staged" "$ALLOWED_SIGNERS"
+  chmod 600 "$ALLOWED_SIGNERS"
+  pass "trusted $count machine signing key(s) for $(printf '%s\n' "$principal_list" | wc -l | tr -d ' ') identity(ies)"
+}
+
+cmd_load() {
+  require_command op || return 1
+  require_command ssh-add || return 1
+  require_vault || return 1
+
+  if ! agent_available; then
+    fail "no ssh-agent is reachable; cannot load keys"
+    return 1
+  fi
+
+  local item exit_code=0 error_log
+  error_log="$(mktemp "${TMPDIR:-/tmp}/dotfiles-keys-err.XXXXXX")" || return 1
+
+  for item in "$AUTH_ITEM" "$SIGN_ITEM"; do
+    local private_key
+    # The key exists only in this variable and the agent. It is never written
+    # to a file, so there is nothing left behind to clean up or to leak.
+    #
+    # op's stderr goes to its own file rather than being folded into stdout:
+    # merging them would splice a warning or progress line into the middle of
+    # the private key and ssh-add would reject a key that is actually fine.
+    local item_id
+    if ! item_id="$(resolve_item_id "$item")" || [[ -z "$item_id" ]]; then
+      fail "could not find $item in $VAULT"
+      exit_code=1
+      continue
+    fi
+    if ! private_key="$(op_run read "$(reference "$item_id" "$PRIVATE_REFERENCE_SUFFIX")" 2>"$error_log")"; then
+      fail "could not read $item from $VAULT"
+      sed 's/^/     /' "$error_log" >&2
+      exit_code=1
+      continue
+    fi
+    # A lifetime bounds how long a revoked service account keeps working, which
+    # only applies to work machines. Expiring the key on a personal machine
+    # would just strand any unattended process that signs after it lapses.
+    local add_args=()
+    [[ "$BACKEND" == "service-account" ]] && add_args=(-t "$KEY_LIFETIME")
+    # macOS ships bash 3.2, where expanding an empty array under `set -u` is an
+    # unbound-variable error rather than nothing.
+    if printf '%s\n' "$private_key" | ssh-add ${add_args[@]+"${add_args[@]}"} - 2>/dev/null; then
+      if [[ "$BACKEND" == "service-account" ]]; then
+        pass "loaded $item for $KEY_LIFETIME"
+      else
+        pass "loaded $item until logout"
+      fi
+    else
+      fail "ssh-add rejected the key for $item"
+      exit_code=1
+    fi
+    unset private_key
+  done
+
+  rm -f -- "$error_log"
+  return "$exit_code"
+}
+
+cmd_unload() {
+  require_command ssh-add || return 1
+
+  local key removed=0 failed=0 recorded=0
+  for key in "$(recorded_key "$AUTH_KEY_FILE")" "$(recorded_key "$SIGN_KEY_FILE")"; do
+    [[ -n "$key" ]] || continue
+    recorded=$((recorded + 1))
+    if agent_holds_key "$key"; then
+      if printf '%s\n' "$key" | ssh-add -d - >/dev/null 2>&1; then
+        removed=$((removed + 1))
+      else
+        # Reporting "nothing was loaded" here would tell the user the agent is
+        # clean when it is still holding a usable key.
+        fail "the agent still holds a key that could not be removed"
+        failed=$((failed + 1))
+      fi
+    fi
+  done
+
+  if (( failed > 0 )); then
+    return 1
+  fi
+  if (( removed > 0 )); then
+    pass "removed $removed key(s) from the agent"
+  elif (( recorded == 0 )); then
+    warn "no public keys are recorded, so nothing could be matched; run: dotfiles-keys record"
+  else
+    note "no managed keys were loaded"
+  fi
+}
+
+cmd_store_token() {
+  if [[ "$BACKEND" != "service-account" ]]; then
+    fail "only work machines need a service account token"
+    note "Personal machines authenticate as you through the 1Password app."
+    return 1
+  fi
+  if ! command -v security >/dev/null 2>&1; then
+    fail "the macOS keychain is unavailable on this host"
+    note "Write the token to $TOKEN_FILE with mode 0600 instead."
+    return 1
+  fi
+
+  note "Paste the 1Password service account token when prompted."
+  note "It is not echoed, and never appears in argv, ps output or shell history."
+  # -w LAST and with no value makes security prompt on the terminal, which is
+  # the only form that keeps the token out of the process list.
+  if security add-generic-password \
+    -U \
+    -a "$USER" \
+    -s "$KEYCHAIN_SERVICE" \
+    -D "1Password service account token" \
+    -j "Used by dotfiles-keys on this work machine" \
+    -w; then
+    pass "stored the token in the login keychain as '$KEYCHAIN_SERVICE'"
+  else
+    fail "could not store the token"
+    return 1
+  fi
+
+  if [[ -e "$TOKEN_FILE" ]]; then
+    warn "a plaintext token still exists at $TOKEN_FILE"
+    note "The keychain now takes precedence. Delete the file once you have"
+    note "confirmed 'dotfiles-keys status' works."
+  fi
+}
+
+cmd_token() {
+  # Callers do `GH_TOKEN="$(dotfiles-keys token)"`, so stdout carries the token
+  # and nothing else. Keep every prerequisite diagnostic on stderr.
+  { require_command op && require_vault; } >&2 || return 1
+
+  local token_item_id
+  if ! token_item_id="$(resolve_item_id "$TOKEN_ITEM")" || [[ -z "$token_item_id" ]]; then
+    fail "could not find $TOKEN_ITEM in $VAULT" >&2
+    return 1
+  fi
+  if ! op_run read --no-newline "$(reference "$token_item_id" "$TOKEN_FIELD")"; then
+    fail "could not read $TOKEN_ITEM from $VAULT"
+    return 1
+  fi
+}
+
+main() {
+  local command="${1:-status}"
+  case "$command" in
+    setup) cmd_setup ;;
+    store-token) cmd_store_token ;;
+    status) cmd_status ;;
+    generate) cmd_generate ;;
+    publish) cmd_publish ;;
+    sync) cmd_sync ;;
+    sync-identities) cmd_sync_identities ;;
+    identity-add)
+      shift
+      cmd_identity_add "$@"
+      ;;
+    sync-signers) cmd_sync_signers ;;
+    load) cmd_load ;;
+    unload) cmd_unload ;;
+    token) cmd_token ;;
+    -h | --help | help) usage ;;
+    *)
+      fail "unknown command: $command"
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,531 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+	echo "usage: $0 personal|work" >&2
+	exit 2
+}
+
+[[ $# -eq 1 ]] || usage
+profile=$1
+
+# Identities are no longer a profile concern: they come from the vault at
+# runtime, so the two profiles now differ only in credential backend.
+case "$profile" in
+personal | work) ;;
+*) usage ;;
+esac
+
+# Synthetic public keys with discarded private halves. They exercise the
+# populated signing path; a blank pair would only ever test the bootstrap
+# branch, which is the one that renders nothing.
+ci_auth_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHcoqwYrh8jsWTbblsbqGGftKsGiL4IwL3wTpd3Ldz dotfiles-ci-auth"
+ci_sign_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFFtrgK1tGmyMelb3q2IwYV7GYJUZpvYEbZxQv0ReNjR dotfiles-ci-sign"
+ci_vault="Dotfiles CI Vault"
+ci_machine_name="ci-$profile"
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null 2>&1 || {
+	echo "chezmoi is required" >&2
+	exit 1
+}
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-check.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+home_dir="$temp_root/home"
+config_file="$temp_root/chezmoi.toml"
+mkdir -p "$home_dir" "$temp_root/cache" "$temp_root/rendered" "$temp_root/xdg-config"
+chmod 700 "$home_dir"
+
+# Seed a pre-existing on-disk key. Any machine that did SSH before adopting
+# these dotfiles has one, and it is the branch that decides whether access can
+# outlive a revoked service account, so CI must actually render it.
+mkdir -p "$home_dir/.ssh"
+printf 'placeholder, never parsed\n' >"$home_dir/.ssh/id_ed25519"
+chmod 600 "$home_dir/.ssh/id_ed25519"
+
+# The machine public keys are written at runtime by `dotfiles-keys sync`, not by
+# chezmoi, so seed them the way that command would. Templates key off their
+# presence, which is what makes the fully-configured branch render here.
+printf '%s\n' "$ci_auth_key" >"$home_dir/.ssh/id_github_auth.pub"
+printf '%s\n' "$ci_sign_key" >"$home_dir/.ssh/id_github_sign.pub"
+
+cat >"$config_file" <<EOF
+[data]
+  machineType = "$profile"
+  machineName = "$ci_machine_name"
+  gitName = "Dotfiles CI"
+  personalEmail = "personal@example.com"
+  opVault = "$ci_vault"
+EOF
+
+cm() {
+	HOME="$home_dir" \
+		XDG_CACHE_HOME="$temp_root/cache" \
+		XDG_CONFIG_HOME="$temp_root/xdg-config" \
+		"$chezmoi_bin" \
+		--cache "$temp_root/cache/chezmoi" \
+		--config "$config_file" \
+		--destination "$home_dir" \
+		--no-tty \
+		--persistent-state "$temp_root/chezmoi.boltdb" \
+		--refresh-externals=never \
+		--source "$repo_root" \
+		"$@"
+}
+
+template_index=0
+while IFS= read -r -d '' template; do
+	template_index=$((template_index + 1))
+	rendered="$temp_root/rendered/$template_index"
+	if [[ "$template" == "$repo_root/.chezmoi.toml.tmpl" ]]; then
+		cm execute-template \
+			--init \
+			--promptChoice "Machine type (personal/work)=$profile" \
+			--promptString "Short name for this machine, used to scope its GitHub keys=$ci_machine_name" \
+			--promptString "Git author name=Dotfiles CI" \
+			--promptString "Personal email address=personal@example.com" \
+			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
+			--file "$template" >"$rendered"
+	else
+		cm execute-template --file "$template" >"$rendered"
+	fi
+
+	# Lint by rendered content, not by source filename: the doctor and the
+	# credential helper are Bash but are not named *.sh.tmpl, and were
+	# previously rendered without ever being checked.
+	if [[ "$(head -n 1 "$rendered")" == "#!"*[Bb]"ash" ]]; then
+		bash -n "$rendered"
+		if command -v shellcheck >/dev/null 2>&1; then
+			shellcheck --shell bash --exclude SC1090,SC1091,SC2050 "$rendered"
+		fi
+	fi
+
+	case "$template" in
+	*.json.tmpl)
+		if command -v jq >/dev/null 2>&1; then
+			sed '/^[[:space:]]*\/\//d' "$rendered" | jq --exit-status . >/dev/null
+		fi
+		if command -v biome >/dev/null 2>&1; then
+			biome format \
+				--json-parse-allow-comments=true \
+				--stdin-file-path "${template%.tmpl}" <"$rendered" >/dev/null
+		fi
+		;;
+	esac
+done < <(find "$repo_root" -type f -name '*.tmpl' -not -path "$repo_root/.git/*" -print0)
+
+cm archive --format tar >"$temp_root/target.tar"
+tar -tf "$temp_root/target.tar" >/dev/null
+cm apply --dry-run --force >/dev/null
+
+for _ in 1 2; do
+	cm apply --exclude scripts --force
+done
+
+status=$(cm status --exclude scripts)
+if [[ -n "$status" ]]; then
+	echo "second apply left destination drift for profile '$profile':" >&2
+	echo "$status" >&2
+	exit 1
+fi
+
+cm verify --exclude scripts
+
+# Identities come from the vault at runtime, so chezmoi must emit no identity
+# routing of its own: a templated includeIf could only ever encode the one
+# identity the rendering machine happened to know about.
+if grep -q 'includeIf' "$home_dir/.gitconfig"; then
+	echo "gitconfig must not template includeIf rules; identities are vault-driven" >&2
+	grep -n 'includeIf' "$home_dir/.gitconfig" >&2
+	exit 1
+fi
+grep -Fq 'path = ~/.config/git/identities.gitconfig' "$home_dir/.gitconfig"
+if [[ -e "$home_dir/.higher.gitconfig" || -e "$home_dir/.isembard.gitconfig" ]]; then
+	echo "per-identity gitconfig files must no longer be managed" >&2
+	exit 1
+fi
+if cm managed | grep -Eq 'config/git/identities'; then
+	echo "git identities must not be managed by chezmoi" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+# GNU first: BSD stat rejects -c outright and prints nothing, but GNU stat
+# treats -f as --file-system and prints a filesystem report to stdout while
+# exiting non-zero, so a BSD-first probe captures that junk plus the fallback.
+file_mode() {
+	stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null
+}
+
+ssh_config="$home_dir/.ssh/config"
+[[ -f "$ssh_config" ]]
+[[ "$(file_mode "$home_dir/.ssh")" == "700" ]]
+[[ "$(file_mode "$ssh_config")" == "600" ]]
+
+grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
+
+# Neither profile may pin an agent socket. The 1Password SSH agent asks approval
+# per client, which no unattended process can answer, so pinning it would stop
+# agent harnesses and CI from pushing or signing at all.
+if grep -Fq 'IdentityAgent' "$ssh_config"; then
+	echo "no profile may pin an agent socket: it would gate unattended pushes" >&2
+	exit 1
+fi
+
+# Seeded above the way `dotfiles-keys sync` would write it. chezmoi must not
+# own it: templating key material would create a second copy that can disagree
+# with the vault.
+grep -Fxq "$ci_auth_key" "$home_dir/.ssh/id_github_auth.pub"
+grep -Fxq "$ci_sign_key" "$home_dir/.ssh/id_github_sign.pub"
+if cm managed | grep -Eq 'id_github_(auth|sign)\.pub|allowed_signers'; then
+	echo "public key material must not be managed by chezmoi" >&2
+	exit 1
+fi
+
+# allowed_signers must list every machine's signing key, and only the vault
+# knows how many machines exist, so it is built at runtime by
+# `dotfiles-keys sync-signers` rather than templated. Assert chezmoi does NOT
+# write it -- a templated one would silently distrust the other machines.
+if [[ -e "$home_dir/.ssh/allowed_signers" ]]; then
+	echo "allowed_signers must not be managed by chezmoi: it would only ever" >&2
+	echo "contain this machine's key, so commits signed elsewhere would fail" >&2
+	exit 1
+fi
+
+grep -Eq '^[[:space:]]*format = ssh$' "$home_dir/.gitconfig"
+grep -Fq 'signingkey = ~/.ssh/id_github_sign.pub' "$home_dir/.gitconfig"
+grep -Fq 'allowedSignersFile = ~/.ssh/allowed_signers' "$home_dir/.gitconfig"
+if grep -Eq '^[[:space:]]*program = gpg$' "$home_dir/.gitconfig"; then
+	echo "gitconfig still routes signing through gpg" >&2
+	exit 1
+fi
+
+# A stray on-disk private key survives revoking the service account, so a
+# service-account machine must never be told to use one. The disposable home
+# was seeded with an id_ed25519 before apply precisely so this branch renders.
+if [[ "$profile" == personal ]]; then
+	grep -Fq 'IdentityFile ~/.ssh/id_ed25519' "$ssh_config"
+elif grep -Fq 'id_ed25519' "$ssh_config"; then
+	echo "work profile must not reference a durable on-disk key: revoking the" >&2
+	echo "service account cannot reach it, so access would outlive revocation" >&2
+	exit 1
+fi
+
+# The whole point of the credential design is that no private key is ever
+# written to a managed target. Two complementary assertions: no target may
+# contain key material, and ~/.ssh may contain nothing beyond the public
+# artefacts we intend, so a future template cannot quietly add a key file.
+if grep -rlEi 'BEGIN [A-Z ]*PRIVATE KEY|OP_SERVICE_ACCOUNT_TOKEN=[A-Za-z0-9]' "$home_dir" 2>/dev/null | grep -q .; then
+	echo "private key material or a literal service account token was written to the target" >&2
+	grep -rlEi 'BEGIN [A-Z ]*PRIVATE KEY|OP_SERVICE_ACCOUNT_TOKEN=[A-Za-z0-9]' "$home_dir" >&2
+	exit 1
+fi
+
+unexpected_ssh=$(find "$home_dir/.ssh" -type f \
+	! -name config ! -name 'id_ed25519' \
+	! -name 'id_github_auth.pub' ! -name 'id_github_sign.pub' -print)
+if [[ -n "$unexpected_ssh" ]]; then
+	echo "apply wrote unexpected files into ~/.ssh:" >&2
+	echo "$unexpected_ssh" >&2
+	exit 1
+fi
+
+# Keys must be scoped to this machine, otherwise revoking one machine on GitHub
+# revokes every machine and signatures cannot be attributed.
+keys_command="$home_dir/.local/bin/dotfiles-keys"
+[[ -x "$keys_command" ]]
+grep -Fq "GitHub Machine Auth ($ci_machine_name)" "$keys_command"
+grep -Fq "GitHub Machine Sign ($ci_machine_name)" "$keys_command"
+grep -Fq 'sync-signers' "$keys_command"
+
+# Prove the generated config actually parses, rather than only that it contains
+# the right substrings. ssh -G fails on an unknown keyword or bad syntax.
+if command -v ssh >/dev/null 2>&1; then
+	if ! ssh_parse=$(ssh -F "$ssh_config" -G github.com 2>&1); then
+		echo "the generated ~/.ssh/config does not parse:" >&2
+		echo "$ssh_parse" >&2
+		exit 1
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# Bootstrap state
+# ---------------------------------------------------------------------------
+# A fresh machine has no recorded keys. That path renders differently from the
+# populated one above and is what every new machine hits first, so assert it
+# degrades cleanly instead of emitting half-configured signing.
+
+bootstrap_config="$temp_root/chezmoi-bootstrap.toml"
+sed -e "s|^  opVault = .*|  opVault = \"\"|" "$config_file" >"$bootstrap_config"
+
+# A fresh machine has no key files, so point the render at an empty destination.
+# The templates key off those files existing, which is exactly what makes the
+# bootstrap branch render.
+bootstrap_home="$temp_root/bootstrap-home"
+mkdir -p "$bootstrap_home"
+
+bootstrap_render() {
+	HOME="$bootstrap_home" \
+		XDG_CACHE_HOME="$temp_root/cache" \
+		XDG_CONFIG_HOME="$temp_root/xdg-config" \
+		"$chezmoi_bin" execute-template \
+		--cache "$temp_root/cache/chezmoi" \
+		--config "$bootstrap_config" \
+		--destination "$bootstrap_home" \
+		--no-tty \
+		--persistent-state "$temp_root/chezmoi.boltdb" \
+		--source "$repo_root" \
+		--file "$1"
+}
+
+bootstrap_gitconfig=$(bootstrap_render dot_gitconfig.tmpl)
+if grep -Eq 'format = ssh|signingkey|gpgsign' <<<"$bootstrap_gitconfig"; then
+	echo "bootstrap gitconfig configures signing before a key exists:" >&2
+	echo "$bootstrap_gitconfig" >&2
+	exit 1
+fi
+
+bootstrap_ssh=$(bootstrap_render private_dot_ssh/private_config.tmpl)
+if grep -Fq 'id_github_auth.pub' <<<"$bootstrap_ssh"; then
+	echo "bootstrap ssh config points at a public key file that is not written yet" >&2
+	exit 1
+fi
+if grep -Fq 'IdentitiesOnly yes' <<<"$bootstrap_ssh"; then
+	echo "bootstrap ssh config restricts identities with none configured, which" >&2
+	echo "would lock the machine out of github before any key is recorded" >&2
+	exit 1
+fi
+
+# The credential helper must stay runnable before anything is configured.
+bootstrap_render dot_local/bin/executable_dotfiles-keys.tmpl >"$temp_root/keys-bootstrap"
+bash -n "$temp_root/keys-bootstrap"
+
+brewfile="$home_dir/.config/homebrew/Brewfile"
+
+# `brew` and `cask` are not interchangeable: declaring a cask as a formula
+# makes `brew bundle` fail on every fresh machine, and nothing else here would
+# notice because CI never installs packages. One batched lookup per kind.
+if command -v brew >/dev/null 2>&1; then
+	# Read into arrays the long way: macOS ships bash 3.2, which has no mapfile.
+	# Tap-qualified names (withgraphite/tap/graphite) cannot be resolved unless
+	# that tap is already added, which it is not on a fresh CI runner. They also
+	# state their origin explicitly, so they are not the ambiguity this guard
+	# exists to catch -- skip them rather than fail on an unavailable tap.
+	declared_formulae=()
+	declared_casks=()
+	while IFS= read -r entry; do
+		[[ -n "$entry" && "$entry" != */* ]] && declared_formulae+=("$entry")
+	done < <(sed -nE 's/^brew "([^"]+)".*/\1/p' "$brewfile")
+	while IFS= read -r entry; do
+		[[ -n "$entry" ]] && declared_casks+=("$entry")
+	done < <(sed -nE 's/^cask "([^"]+)".*/\1/p' "$brewfile")
+
+	if ((${#declared_formulae[@]} > 0)) && ! brew info --formula "${declared_formulae[@]}" >/dev/null 2>&1; then
+		echo "a Brewfile 'brew' entry is not a formula (a cask declared as a formula?):" >&2
+		for entry in "${declared_formulae[@]}"; do
+			brew info --formula "$entry" >/dev/null 2>&1 || echo "  brew \"$entry\"" >&2
+		done
+		exit 1
+	fi
+	if ((${#declared_casks[@]} > 0)) && ! brew info --cask "${declared_casks[@]}" >/dev/null 2>&1; then
+		echo "a Brewfile 'cask' entry is not a cask:" >&2
+		for entry in "${declared_casks[@]}"; do
+			brew info --cask "$entry" >/dev/null 2>&1 || echo "  cask \"$entry\"" >&2
+		done
+		exit 1
+	fi
+fi
+
+grep -Eq '^cask "1password-cli"$' "$brewfile"
+if [[ "$profile" == personal ]]; then
+	grep -Eq '^cask "1password"$' "$brewfile"
+elif grep -Eq '^cask "1password"$' "$brewfile"; then
+	echo "work profile must not install the 1Password desktop app" >&2
+	exit 1
+fi
+
+privacy_expected=(
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+	"DO_NOT_TRACK=1"
+	"GH_TELEMETRY=0"
+	"GRAPHITE_DISABLE_TELEMETRY=1"
+	"GROK_TELEMETRY_ENABLED=0"
+	"HOMEBREW_NO_ANALYTICS=1"
+	"SST_TELEMETRY_DISABLED=1"
+	"YARN_ENABLE_TELEMETRY=0"
+)
+
+assert_privacy_env() {
+	local shell_name=$1
+	local output=$2
+	local expected
+
+	for expected in "${privacy_expected[@]}"; do
+		if ! grep -Fxq -- "$expected" <<<"$output"; then
+			echo "$shell_name did not export $expected" >&2
+			exit 1
+		fi
+	done
+}
+
+# The nested shells intentionally expand HOME after env -i sets it.
+# shellcheck disable=SC2016
+bash_privacy=$(env -i HOME="$home_dir" PATH="$PATH" bash --noprofile --norc -c '. "$HOME/.profile"; env')
+assert_privacy_env Bash "$bash_privacy"
+
+if command -v zsh >/dev/null 2>&1; then
+	# shellcheck disable=SC2016
+	zsh_privacy=$(env -i HOME="$home_dir" PATH="$PATH" zsh -dfc 'source "$HOME/.config/zsh/05-privacy.zsh"; env')
+	assert_privacy_env Zsh "$zsh_privacy"
+fi
+
+if command -v fish >/dev/null 2>&1; then
+	# shellcheck disable=SC2016
+	fish_privacy=$(env -i HOME="$home_dir" PATH="$PATH" fish -c 'source "$HOME/.config/fish/conf.d/05-privacy.fish"; env')
+	assert_privacy_env Fish "$fish_privacy"
+fi
+
+for forbidden_env in HOMEBREW_NO_AUTO_UPDATE CHECKPOINT_DISABLE GH_NO_UPDATE_NOTIFIER npm_config_offline YARN_ENABLE_NETWORK; do
+	if grep -Eq "^${forbidden_env}=" <<<"$bash_privacy"; then
+		echo "forbidden update/network control is exported: $forbidden_env" >&2
+		exit 1
+	fi
+done
+
+grep -Eq '^[[:space:]]*use_versions_host_track[[:space:]]*=[[:space:]]*false[[:space:]]*$' \
+	"$home_dir/.config/mise/config.toml"
+grep -Eq '^[[:space:]]*disable_checkpoint_signature[[:space:]]*=[[:space:]]*true[[:space:]]*$' \
+	"$home_dir/.terraformrc"
+if grep -Eq '^[[:space:]]*disable_checkpoint[[:space:]]*=' "$home_dir/.terraformrc"; then
+	echo "Terraform checkpoint checks must remain enabled" >&2
+	exit 1
+fi
+
+cursor_source="$repo_root/private_Library/private_Application Support/private_Cursor/User/modify_settings.json"
+cursor_settings="$home_dir/Library/Application Support/Cursor/User/settings.json"
+if [[ ! -f "$cursor_settings" ]]; then
+	cursor_settings="$temp_root/rendered/cursor-settings.json"
+	cm execute-template --with-stdin --file "$cursor_source" </dev/null \
+		>"$cursor_settings"
+fi
+
+license_key=flow-icons.licenseKey
+license_value=SYNTHETIC-FLOW-LICENSE
+cursor_existing="$temp_root/rendered/cursor-existing.json"
+cursor_preserved="$temp_root/rendered/cursor-preserved.json"
+printf '{\n  // Existing local-only extension state.\n  "%s": "%s",\n}\n' \
+	"$license_key" "$license_value" >"$cursor_existing"
+cm execute-template --with-stdin --file "$cursor_source" \
+	<"$cursor_existing" >"$cursor_preserved"
+if ! grep -Fq -- "\"$license_key\": \"$license_value\"" "$cursor_preserved"; then
+	echo "Cursor's existing local Flow Icons license was not preserved" >&2
+	exit 1
+fi
+if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
+	echo "Cursor's license key must not be invented on a new installation" >&2
+	exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+	sed '/^[[:space:]]*\/\//d' "$cursor_settings" | jq --exit-status . >/dev/null
+fi
+if command -v biome >/dev/null 2>&1; then
+	biome format --json-parse-allow-comments=true \
+		--stdin-file-path settings.json <"$cursor_settings" >/dev/null
+fi
+for cursor_setting in \
+	'"git.autofetch": true' \
+	'"json.schemaDownload.enable": true' \
+	'"telemetry.telemetryLevel": "off"' \
+	'"workbench.enableExperiments": false' \
+	'"security.workspace.trust.enabled": true' \
+	'"security.promptForLocalFileProtocolHandling": true' \
+	'"extensions.autoCheckUpdates": true' \
+	'"extensions.autoUpdate": true' \
+	'"update.mode": "start"'; do
+	grep -Fq -- "$cursor_setting" "$cursor_settings"
+done
+
+grep -Fq 'analytics off' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+grep -Fq 'gh config set telemetry disabled' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+grep -Fq 'sst telemetry disable' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
+
+grok_config="$home_dir/.grok/config.toml"
+[[ -f "$grok_config" ]]
+grep -Eq '^[[:space:]]*telemetry[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*trace_upload[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*mixpanel_enabled[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+grep -Eq '^[[:space:]]*disable_codebase_upload[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$grok_config"
+
+for bash_file in "$home_dir/.bash_profile" "$home_dir/.bashrc" "$home_dir/.profile"; do
+	[[ ! -f "$bash_file" ]] || bash -n "$bash_file"
+done
+sh -n "$home_dir/.profile"
+
+if command -v fish >/dev/null 2>&1 && [[ -d "$home_dir/.config/fish" ]]; then
+	while IFS= read -r -d '' fish_file; do
+		fish --no-execute "$fish_file"
+	done < <(find "$home_dir/.config/fish" -type f -name '*.fish' -print0)
+fi
+
+if command -v zsh >/dev/null 2>&1; then
+	for zsh_file in "$home_dir/.zshenv" "$home_dir/.zprofile" "$home_dir/.zshrc"; do
+		[[ ! -f "$zsh_file" ]] || zsh -n "$zsh_file"
+	done
+	if [[ -d "$home_dir/.config/zsh" ]]; then
+		while IFS= read -r -d '' zsh_file; do
+			zsh -n "$zsh_file"
+		done < <(find "$home_dir/.config/zsh" -type f -name '*.zsh' -print0)
+	fi
+fi
+
+if command -v starship >/dev/null 2>&1 && [[ -f "$home_dir/.config/starship.toml" ]]; then
+	STARSHIP_CONFIG="$home_dir/.config/starship.toml" starship print-config >/dev/null
+fi
+
+ghostty_bin=$(command -v ghostty || true)
+if [[ -z "$ghostty_bin" && -x /Applications/Ghostty.app/Contents/MacOS/ghostty ]]; then
+	ghostty_bin=/Applications/Ghostty.app/Contents/MacOS/ghostty
+fi
+if [[ -n "$ghostty_bin" && -f "$home_dir/.config/ghostty/config" ]]; then
+	"$ghostty_bin" +validate-config --config-file="$home_dir/.config/ghostty/config"
+fi
+
+if command -v tmux >/dev/null 2>&1 && [[ -f "$home_dir/.tmux.conf" ]]; then
+	tmux_socket="dotfiles-check-$$-$profile"
+	HOME="$home_dir" tmux -L "$tmux_socket" -f "$home_dir/.tmux.conf" new-session -d
+	HOME="$home_dir" tmux -L "$tmux_socket" kill-server
+fi
+
+if command -v nvim >/dev/null 2>&1 && [[ -f "$home_dir/.config/nvim/init.lua" ]]; then
+	lazy_lock_before=$(cksum "$repo_root/dot_config/nvim/lazy-lock.json")
+	mise_lock_before=$(cksum "$repo_root/mise.lock")
+	mkdir -p \
+		"$temp_root/lazy-stub/lua/lazy" \
+		"$temp_root/nvim-cache" \
+		"$temp_root/nvim-data" \
+		"$temp_root/nvim-state"
+	cat >"$temp_root/lazy-stub/lua/lazy/init.lua" <<'LUA'
+return {
+  setup = function() end,
+}
+LUA
+	HOME="$home_dir" \
+		LAZY="$temp_root/lazy-stub" \
+		XDG_CACHE_HOME="$temp_root/nvim-cache" \
+		XDG_CONFIG_HOME="$home_dir/.config" \
+		XDG_DATA_HOME="$temp_root/nvim-data" \
+		XDG_STATE_HOME="$temp_root/nvim-state" \
+		nvim --headless -u "$home_dir/.config/nvim/init.lua" +qa
+	[[ "$lazy_lock_before" == "$(cksum "$repo_root/dot_config/nvim/lazy-lock.json")" ]]
+	[[ "$mise_lock_before" == "$(cksum "$repo_root/mise.lock")" ]]
+fi
+
+echo "validated chezmoi $profile profile with $($chezmoi_bin --version | head -n 1)"

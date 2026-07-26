@@ -2,10 +2,10 @@
 # Local Overrides & External Tools
 # =============================================================================
 
-# 1Password-backed secrets
-# To enable 1Password integration, uncomment and adjust the op:// URI below.
-# Requires `op` CLI to be installed and configured.
-# set -gx NGROK_AUTHTOKEN (op read 'op://Private/ngrok/credential' --account {{ .onePasswordAccount }})
+# 1Password is wired up already; see `dotfiles-keys`. To pull another secret,
+# resolve it on demand rather than at shell startup, and note that a work
+# machine's service account cannot read Private vaults -- only the shared one.
+# set -gx NGROK_AUTHTOKEN (op read "op://$opVault/ngrok/credential")
 # Optional: set a default Nx workspace if you want `nx` to work outside a repo.
 # set -gx BRADEN_NX_DEFAULT_WORKSPACE "$HOME/path/to/your/workspace"
-set -gx ANIMUS_DEVELOPER_NAME braden
+set -gx HIGHER_DEVELOPER_NAME braden

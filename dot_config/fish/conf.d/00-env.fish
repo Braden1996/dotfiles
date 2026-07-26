@@ -2,7 +2,7 @@
 # Environment & PATH Configuration
 # =============================================================================
 
-# Detect Homebrew prefix (Apple Silicon vs Intel).
+# Detect the Homebrew prefix (Apple Silicon vs Intel).
 set -l homebrew_prefix /opt/homebrew
 if not test -d $homebrew_prefix
     set homebrew_prefix /usr/local
@@ -12,30 +12,29 @@ set -gx HOMEBREW_PREFIX $homebrew_prefix
 set -gx HOMEBREW_CELLAR "$HOMEBREW_PREFIX/Cellar"
 set -gx HOMEBREW_REPOSITORY $HOMEBREW_PREFIX
 
-# Keep PATH ordering aligned with the existing zsh setup.
-fish_add_path -gPm "$HOMEBREW_PREFIX/bin" "$HOMEBREW_PREFIX/sbin"
-fish_add_path -gPm "$HOME/.local/bin"
-fish_add_path -gPm "$HOME/.local/share/mise/shims"
-fish_add_path -gPm "$HOME/.cargo/bin"
-fish_add_path -gPm "$HOME/.bun/bin"
-fish_add_path -gPm "$HOME/.antigravity/antigravity/bin"
+# Keep one explicit precedence policy across Fish, Zsh, and Bash. User
+# wrappers and mise-managed runtimes win over standalone/Brew installations.
+set -l preferred_paths \
+    "$HOME/.local/bin" \
+    "$HOME/.local/share/mise/shims" \
+    "$HOME/.bun/bin" \
+    "$HOME/.cargo/bin" \
+    "$HOME/.antigravity/antigravity/bin" \
+    "$HOME/.grok/bin" \
+    "$HOME/.kimi-code/bin" \
+    "$HOMEBREW_PREFIX/bin" \
+    "$HOMEBREW_PREFIX/sbin" \
+    /usr/local/bin
+fish_add_path -gPm $preferred_paths
+
 fish_add_path -gPa "$HOME/Library/Android/sdk/platform-tools"
 fish_add_path -gPa "$HOME/.safe-chain/bin"
 
-set -gx INFOPATH "$HOMEBREW_PREFIX/share/info" $INFOPATH
-if set -q MANPATH[1]
-    set -gx MANPATH "" $MANPATH
+if not contains -- "$HOMEBREW_PREFIX/share/info" $INFOPATH
+    set -gx INFOPATH "$HOMEBREW_PREFIX/share/info" $INFOPATH
 end
-
-# Prefer a terminal-provided startup timestamp. Fall back to a one-time
-# timestamp capture so the initial Starship right prompt can still show shell
-# startup duration outside terminal wrappers like Ghostty.
-if status is-interactive; and not set -q __BRADEN_SHELL_START_REAL
-    if command -q perl
-        set -gx __BRADEN_SHELL_START_REAL (command perl -MTime::HiRes=time -e 'printf "%.6f\n", time')
-    else if command -q python3
-        set -gx __BRADEN_SHELL_START_REAL (command python3 -c 'import time; print(f"{time.time():.6f}")')
-    end
+if set -q MANPATH[1]; and not contains -- "" $MANPATH
+    set -gx MANPATH "" $MANPATH
 end
 
 if test -d /Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
@@ -46,6 +45,6 @@ if test -d "$HOME/Library/Android/sdk"
     set -gx ANDROID_HOME "$HOME/Library/Android/sdk"
 end
 
-if status is-interactive
+if status is-interactive; and isatty stdin; and isatty stdout
     set -gx GPG_TTY (tty)
 end

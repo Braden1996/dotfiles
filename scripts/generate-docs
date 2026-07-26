@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+
+# Regenerate the inventory sections of README.md from their sources of truth.
+#
+# Every list in this repository (packages, extensions, plugins, hooks, prompts)
+# is documented by generating it, never by hand. `--check` re-renders and diffs
+# so CI fails the moment the README stops describing what is actually installed.
+
+# This script emits Markdown, so single-quoted strings are full of backticks
+# that ShellCheck reads as command substitution. They are code spans.
+# shellcheck disable=SC2016
+
+set -euo pipefail
+
+usage() {
+	cat >&2 <<'USAGE'
+usage: generate-docs [--check]
+
+  (no flags)  Rewrite the generated blocks in README.md in place.
+  --check     Fail if README.md is not what the generator would produce.
+USAGE
+	exit 2
+}
+
+check_only=false
+case "${1:-}" in
+"") ;;
+--check) check_only=true ;;
+*) usage ;;
+esac
+[[ $# -le 1 ]] || usage
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# Descriptions come from Homebrew itself rather than a hand-written table, so
+# they cannot drift from the package. brew only exists on macOS though, and
+# check:docs runs on Ubuntu CI, so the answers are cached in a committed file:
+# refreshed wherever brew is available, read everywhere.
+descriptions_cache="$repo_root/scripts/package-descriptions.txt"
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null 2>&1 || {
+	echo "chezmoi is required" >&2
+	exit 1
+}
+
+readme="$repo_root/README.md"
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-docs.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+# Render a template against a synthetic profile rather than the caller's own
+# machine config, so output does not depend on who runs the generator.
+render_for_profile() {
+	local profile=$1 template=$2
+	local config_file="$temp_root/config-$profile.toml"
+
+	mkdir -p "$temp_root/home"
+
+	cat >"$config_file" <<EOF
+[data]
+  machineType = "$profile"
+  machineName = "docs"
+  gitName = "Docs"
+  personalEmail = "personal@example.com"
+  opVault = "Example Vault"
+EOF
+
+	HOME="$temp_root/home" \
+		"$chezmoi_bin" execute-template \
+		--config "$config_file" \
+		--destination "$temp_root/home" \
+		--no-tty \
+		--source "$repo_root" \
+		--file "$template"
+}
+
+# The Brewfile declares its own groups with `## Heading`, distinct from `#`
+# prose that explains a decision. That convention is what lets these headings be
+# generated instead of maintained in a second place that could disagree.
+brew_entries() {
+	local rendered=$1 kind=$2
+	awk -v kind="$kind" '
+		/^## / { group = substr($0, 4); next }
+		$1 == kind {
+			match($0, /"[^"]+"/)
+			name = substr($0, RSTART + 1, RLENGTH - 2)
+			print (group == "" ? "-" : group) "\t" name
+		}
+	' "$rendered"
+}
+
+# Refresh the cache from brew when we can, in two batched calls rather than one
+# per package. Casks are described as "(Display Name) Description"; keep only
+# the description so both kinds read the same.
+refresh_descriptions() {
+	command -v brew >/dev/null 2>&1 || return 0
+
+	local personal="$1" refreshed="$temp_root/descriptions"
+	local names=()
+	local kind name
+	for kind in brew cask; do
+		while IFS=$'\t' read -r _ name; do
+			[[ -n "$name" ]] && names+=("$kind:$name")
+		done < <(brew_entries "$personal" "$kind")
+	done
+
+	: >"$refreshed"
+	local formulae=() casks=()
+	local entry
+	for entry in "${names[@]}"; do
+		case "$entry" in
+		brew:*) formulae+=("${entry#brew:}") ;;
+		cask:*) casks+=("${entry#cask:}") ;;
+		esac
+	done
+
+	# Never let an undescribable package abort generation: an untrusted tap or a
+	# font has no description, and that is not a documentation failure.
+	{
+		((${#formulae[@]} > 0)) && { brew desc --formula "${formulae[@]}" 2>/dev/null || true; }
+		((${#casks[@]} > 0)) && { brew desc --cask "${casks[@]}" 2>/dev/null || true; }
+	} | sed -E 's/^([^:]+): (\([^)]*\) )?/\1\t/' | sort -u >"$refreshed" || true
+
+	if [[ -s "$refreshed" ]]; then
+		mv -- "$refreshed" "$descriptions_cache"
+	fi
+}
+
+describe() {
+	[[ -r "$descriptions_cache" ]] || return 0
+	# A tap-qualified entry is described under its bare name.
+	awk -F'\t' -v name="${1##*/}" '$1 == name { print $2; exit }' "$descriptions_cache"
+}
+
+# ---------------------------------------------------------------------------
+# Section generators
+# ---------------------------------------------------------------------------
+
+emit_packages() {
+	local personal="$temp_root/brewfile-personal" work="$temp_root/brewfile-work"
+	render_for_profile personal dot_config/homebrew/Brewfile.tmpl >"$personal"
+	render_for_profile work dot_config/homebrew/Brewfile.tmpl >"$work"
+	refresh_descriptions "$personal"
+
+	local kind label
+	for kind in tap brew cask; do
+		case "$kind" in
+		tap) label="Taps" ;;
+		brew) label="Formulae" ;;
+		cask) label="Casks" ;;
+		esac
+
+		printf '#### %s\n' "$label"
+
+		local group="" last_group="" name line
+		while IFS=$'\t' read -r group name; do
+			[[ -n "$name" ]] || continue
+			# Suppress a group label that merely repeats the section heading.
+			if [[ "$group" != "$last_group" && "$group" != "-" && "$group" != "$label" ]]; then
+				printf '\n*%s*\n\n' "$group"
+				last_group="$group"
+			elif [[ "$group" == "$label" && "$last_group" != "$label" ]]; then
+				printf '\n'
+				last_group="$group"
+			fi
+			line="- \`$name\`"
+			local description
+			description="$(describe "$name")"
+			[[ -n "$description" ]] && line+=" — $description"
+			# Annotate anything the other profile does not get, so a reader can
+			# see at a glance which machines actually receive it.
+			if ! grep -qE "^$kind \"$name\"$" "$work"; then
+				line+=' _(personal only)_'
+			elif ! grep -qE "^$kind \"$name\"$" "$personal"; then
+				line+=' _(work only)_'
+			fi
+			printf '%s\n' "$line"
+		done < <(brew_entries "$personal" "$kind")
+
+		# Anything present only on work machines never appears in the personal
+		# listing above, so sweep the work render for leftovers.
+		while IFS=$'\t' read -r group name; do
+			[[ -n "$name" ]] || continue
+			if ! grep -qE "^$kind \"$name\"$" "$personal"; then
+				local work_description
+				work_description="$(describe "$name")"
+				printf -- '- `%s`%s _(work only)_\n' "$name" \
+					"${work_description:+ — $work_description}"
+			fi
+		done < <(brew_entries "$work" "$kind")
+
+		printf '\n'
+	done
+}
+
+emit_runtimes() {
+	printf '#### Global runtimes (mise)\n\n'
+	awk '
+		/^\[tools\]/ { in_tools = 1; next }
+		/^\[/ { in_tools = 0 }
+		in_tools && /=/ {
+			gsub(/[[:space:]]|"/, "")
+			split($0, kv, "=")
+			printf "- `%s` %s\n", kv[1], kv[2]
+		}
+	' "$repo_root/dot_config/mise/config.toml"
+
+	printf '\n#### Repository validation toolchain\n\n'
+	awk '
+		/^\[tools\]/ { in_tools = 1; next }
+		/^\[/ { in_tools = 0 }
+		in_tools && /=/ {
+			gsub(/[[:space:]]|"/, "")
+			split($0, kv, "=")
+			printf "- `%s` %s\n", kv[1], kv[2]
+		}
+	' "$repo_root/.mise.toml"
+	printf '\n'
+}
+
+emit_editor_and_shell() {
+	local cursor_manifest="$repo_root/dot_config/cursor/extensions.txt"
+	local cursor_count
+	cursor_count=$(grep -cvE '^[[:space:]]*(#|$)' "$cursor_manifest")
+
+	printf '#### Cursor extensions (%s)\n\n' "$cursor_count"
+	grep -vE '^[[:space:]]*(#|$)' "$cursor_manifest" | sort | sed 's/^/- `/; s/$/`/'
+
+	printf '\n#### Zsh plugins (Antidote, all pinned)\n\n'
+	# Several entries are the same repository at different subpaths, so the
+	# path is part of the identity and must be shown to keep the list honest.
+	awk '
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]*$/ { next }
+		{
+			pin = ""
+			subpath = ""
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^pin:/) pin = substr($i, 5, 7)
+				if ($i ~ /^path:/) subpath = substr($i, 6)
+			}
+			name = $1 (subpath == "" ? "" : "/" subpath)
+			printf "- `%s`%s\n", name, (pin == "" ? "" : " @ " pin)
+		}
+	' "$repo_root/dot_zsh_plugins.txt"
+
+	local nvim_count
+	if command -v jq >/dev/null 2>&1; then
+		nvim_count=$(jq 'keys | length' "$repo_root/dot_config/nvim/lazy-lock.json")
+	else
+		nvim_count=$(grep -cE '^[[:space:]]*"' "$repo_root/dot_config/nvim/lazy-lock.json")
+	fi
+	printf '\n#### Neovim\n\n'
+	printf -- '- AstroNvim v5 with %s plugins pinned in `dot_config/nvim/lazy-lock.json`.\n' "$nvim_count"
+	printf -- '- The lock is not listed here: it churns on every plugin update. Read the file.\n\n'
+}
+
+emit_externals() {
+	printf 'Fetched at apply time and verified against a recorded SHA-256.\n\n'
+	awk '
+		/^\[".*"\]$/ {
+			path = $0
+			gsub(/^\["|"\]$/, "", path)
+			next
+		}
+		/^url = / {
+			url = $3
+			gsub(/"/, "", url)
+			printf "- `%s` — %s\n", path, url
+		}
+	' "$repo_root/.chezmoiexternal.toml"
+	printf '\n'
+}
+
+emit_apply_surface() {
+	printf '#### Scripts that run during an apply\n\n'
+	printf 'These execute on your machine. Read them before applying on a host you do not control.\n\n'
+	local hook name kind
+	for hook in "$repo_root"/run_*; do
+		name=$(basename "$hook")
+		name=${name%.tmpl}
+		case "$name" in
+		run_once_*) kind="once" ;;
+		run_onchange_*) kind="on change" ;;
+		*) kind="always" ;;
+		esac
+		name=${name#run_once_}
+		name=${name#run_onchange_}
+		name=${name#before_}
+		name=${name#after_}
+		printf -- '- `%s` (%s)\n' "$name" "$kind"
+	done
+
+	printf '\n#### Commands installed to `~/.local/bin`\n\n'
+	# Reproduce each command's own --help text rather than describing it a
+	# second time here. A description maintained separately from the command is
+	# a description that goes stale.
+	local command_file usage_text shims=()
+	for command_file in "$repo_root"/dot_local/bin/executable_*; do
+		name=$(basename "$command_file")
+		name=${name#executable_}
+		name=${name%.tmpl}
+
+		usage_text=$(render_for_profile personal "dot_local/bin/$(basename "$command_file")" |
+			awk "/cat <<'USAGE'/ { found = 1; next } found && /^USAGE\$/ { exit } found { print }")
+
+		if [[ -z "$usage_text" ]]; then
+			shims+=("$name")
+			continue
+		fi
+		printf '##### `%s`\n\n```text\n%s\n```\n\n' "$name" "$usage_text"
+	done
+
+	if ((${#shims[@]} > 0)); then
+		printf 'Plus package-manager shims that take the underlying tool'"'"'s own arguments: '
+		printf '`%s` ' "${shims[@]}"
+		printf '\n'
+	fi
+
+	printf '\n#### Repository checks\n\n'
+	awk '
+		/^\[tasks\./ {
+			task = $0
+			gsub(/^\[tasks\.|\]$|"/, "", task)
+			next
+		}
+		/^description = / {
+			sub(/^description = "/, "")
+			sub(/"$/, "")
+			if (task != "") printf "- `mise run %s` — %s\n", task, $0
+			task = ""
+		}
+	' "$repo_root/.mise.toml"
+	printf '\n'
+}
+
+emit_init_data() {
+	printf 'Prompted once and stored only in the machine-local chezmoi config.\n\n'
+	printf '| Key | Prompt |\n| --- | --- |\n'
+	awk '
+		match($0, /prompt(String|Choice)Once \. "[^"]+"/) {
+			key = substr($0, RSTART, RLENGTH)
+			gsub(/.*"/, "", key)
+			sub(/".*/, "", key)
+		}
+		{
+			if (match($0, /promptStringOnce \. "[^"]+" "[^"]+"/) || match($0, /promptChoiceOnce \. "[^"]+" "[^"]+"/)) {
+				line = substr($0, RSTART, RLENGTH)
+				n = split(line, parts, "\"")
+				printf "| `%s` | %s |\n", parts[2], parts[4]
+			}
+		}
+	' "$repo_root/.chezmoi.toml.tmpl"
+	printf '| `credentialBackend` | Derived from `machineType`, not prompted |\n\n'
+}
+
+emit_privacy_env() {
+	printf 'Exported by Fish, Zsh and Bash alike.\n\n'
+	awk '
+		/^\[privacyEnv\]/ { in_section = 1; next }
+		/^\[/ { in_section = 0 }
+		in_section && /=/ {
+			gsub(/[[:space:]]|"/, "")
+			split($0, kv, "=")
+			printf "- `%s=%s`\n", kv[1], kv[2]
+		}
+	' "$repo_root/.chezmoidata.toml"
+	printf '\n'
+}
+
+# ---------------------------------------------------------------------------
+# Block replacement
+# ---------------------------------------------------------------------------
+
+declare -a SECTION_IDS=(
+	packages
+	runtimes
+	editor-and-shell
+	externals
+	apply-surface
+	init-data
+	privacy-env
+)
+
+generate_section() {
+	case "$1" in
+	packages) emit_packages ;;
+	runtimes) emit_runtimes ;;
+	editor-and-shell) emit_editor_and_shell ;;
+	externals) emit_externals ;;
+	apply-surface) emit_apply_surface ;;
+	init-data) emit_init_data ;;
+	privacy-env) emit_privacy_env ;;
+	*)
+		echo "unknown section: $1" >&2
+		exit 1
+		;;
+	esac
+}
+
+current="$readme"
+for id in "${SECTION_IDS[@]}"; do
+	body="$temp_root/body-$id"
+	generate_section "$id" >"$body"
+
+	if ! grep -Fq "<!-- generated:$id -->" "$current"; then
+		echo "README.md is missing the marker <!-- generated:$id -->" >&2
+		exit 1
+	fi
+
+	next="$temp_root/readme-$id"
+	awk -v id="$id" -v body="$body" '
+		$0 == "<!-- generated:" id " -->" {
+			print
+			print "<!-- Do not edit by hand: run `mise run docs`. -->"
+			while ((getline line < body) > 0) print line
+			close(body)
+			skipping = 1
+			next
+		}
+		$0 == "<!-- /generated:" id " -->" { skipping = 0 }
+		!skipping { print }
+	' "$current" >"$next"
+	current="$next"
+done
+
+if [[ "$check_only" == true ]]; then
+	if ! diff -u "$readme" "$current" >"$temp_root/diff"; then
+		echo "README.md is out of date with its sources of truth." >&2
+		echo "Run: mise run docs" >&2
+		echo >&2
+		cat "$temp_root/diff" >&2
+		exit 1
+	fi
+	echo "README.md inventory matches its sources of truth."
+else
+	cp "$current" "$readme"
+	echo "Regenerated ${#SECTION_IDS[@]} inventory sections in README.md."
+fi

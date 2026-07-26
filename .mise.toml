@@ -1,0 +1,75 @@
+[tools]
+actionlint = "1.7.12"
+biome = "2.5.3"
+chezmoi = "2.71.0"
+gitleaks = "8.30.1"
+jq = "1.8.1"
+shellcheck = "0.11.0"
+shfmt = "3.13.1"
+starship = "1.26.0"
+stylua = "2.5.2"
+taplo = "0.10.0"
+zizmor = "1.26.1"
+"aqua:Kampfkarren/selene" = "0.31.0"
+
+[tasks."check:actions"]
+description = "Lint GitHub Actions workflows"
+run = [
+  "actionlint",
+  "zizmor --pedantic .github/workflows",
+]
+
+[tasks."check:data"]
+description = "Validate repository TOML and JSON data"
+run = [
+  "taplo lint --no-schema .chezmoidata.toml .chezmoiexternal.toml .gitleaks.toml .mise.toml dot_config/mise/config.toml dot_config/mise/mise.lock dot_config/starship.toml mise.lock",
+  "for file in private_Library/private_Application\\ Support/private_Cursor/User/keybindings.json dot_config/nvim/dot_luarc.json dot_config/nvim/dot_neoconf.json; do biome format --json-parse-allow-comments=true --stdin-file-path \"$file\" < \"$file\" >/dev/null; done",
+]
+
+[tasks."check:chezmoi"]
+description = "Render and apply both machine profiles in disposable homes"
+run = [
+  "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/validate-chezmoi personal",
+  "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/validate-chezmoi work",
+]
+
+[tasks.docs]
+description = "Regenerate the README inventory from its sources of truth"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/generate-docs"
+
+[tasks."check:docs"]
+description = "Fail if the README inventory no longer matches what is installed"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/generate-docs --check"
+
+[tasks."check:lua"]
+description = "Check Neovim formatting and Lua diagnostics"
+run = [
+  "stylua --check --config-path dot_config/nvim/dot_stylua.toml dot_config/nvim/init.lua dot_config/nvim/lua",
+  "selene --config dot_config/nvim/selene.toml dot_config/nvim/lua",
+]
+
+[tasks."check:scripts"]
+description = "Lint repository validation scripts"
+run = [
+  "shellcheck scripts/validate-chezmoi scripts/generate-docs",
+  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs",
+]
+
+[tasks."check:secrets"]
+description = "Scan Git history and the working tree for secrets"
+run = [
+  "gitleaks git --config .gitleaks.toml --redact --verbose",
+  "gitleaks dir --config .gitleaks.toml --redact --verbose .",
+]
+
+[tasks."check:static"]
+description = "Run fast, platform-independent checks"
+depends = ["check:actions", "check:data", "check:docs", "check:lua", "check:scripts", "check:secrets"]
+
+[tasks.check]
+description = "Run the complete local validation suite"
+depends = ["check:static", "check:chezmoi"]
+
+[tasks."format:lua"]
+description = "Format active Neovim Lua files"
+run = "stylua --config-path dot_config/nvim/dot_stylua.toml dot_config/nvim/init.lua dot_config/nvim/lua"

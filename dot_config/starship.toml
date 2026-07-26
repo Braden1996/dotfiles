@@ -14,10 +14,10 @@ continuation_prompt = "[▸▹ ](overlay1)"
 
 # Left side: context + character (where you type)
 # Dimmed diamond separator between directory and git
-format = """$username$hostname$container$directory$git_branch${env_var.BRADEN_GIT_DIRTY}$git_state $character"""
+format = """$username$hostname$container$directory$git_branch$git_status$git_state $character"""
 
-# Right side: metadata only (startup/duration/time)
-right_format = """${env_var.ZSH_STARTUP_MS}$cmd_duration$time"""
+# Right side: command metadata and clock.
+right_format = """$cmd_duration$time"""
 
 # =============================================================================
 # Character Module (Runes!)
@@ -61,7 +61,7 @@ symbol = "󰘬"
 style = "mauve"
 
 [git_status]
-disabled = true
+disabled = false
 ignore_submodules = true
 use_git_executable = false
 format = '[ $all_status$ahead_behind]($style)'
@@ -78,11 +78,6 @@ staged = "󰐗 "
 renamed = "󰑕 "
 deleted = "󰍶 "
 
-[git_commit]
-format = "[ $hash$tag]($style) "
-tag_symbol = " 󰓹 "
-style = "mauve"
-
 [git_state]
 format = ' [\($state( $progress_current of $progress_total)\)]($style)'
 cherry_pick = "[󰇚 PICKING](bold red)"
@@ -97,7 +92,7 @@ bisect = "[󰃻 BISECTING](bold peach)"
 [cmd_duration]
 format = "[󱎫 $duration]($style) "
 style = "peach"
-min_time = 1
+min_time = 500
 show_milliseconds = true
 
 [time]
@@ -126,215 +121,6 @@ show_always = false
 format = "[$user]($style)@"
 style_user = "flamingo"
 style_root = "bold red"
-
-# =============================================================================
-# Language Modules with Catppuccin Colors
-# =============================================================================
-[nodejs]
-disabled = true
-
-[python]
-disabled = true
-
-[rust]
-disabled = true
-
-[golang]
-disabled = true
-
-[java]
-disabled = true
-
-[ruby]
-disabled = true
-
-[lua]
-disabled = true
-
-# =============================================================================
-# Other Language Modules (keep icons, apply palette)
-# =============================================================================
-[aws]
-symbol = "  "
-style = "peach"
-
-[buf]
-symbol = " "
-
-[c]
-symbol = " "
-style = "blue"
-
-[cmake]
-symbol = " "
-
-[conda]
-symbol = " "
-style = "green"
-
-[crystal]
-symbol = " "
-
-[dart]
-symbol = " "
-style = "sky"
-
-[docker_context]
-symbol = " "
-style = "blue"
-
-[elixir]
-symbol = " "
-style = "mauve"
-
-[elm]
-symbol = " "
-
-[fennel]
-symbol = " "
-
-[fossil_branch]
-symbol = " "
-
-[guix_shell]
-symbol = " "
-
-[haskell]
-symbol = " "
-style = "mauve"
-
-[haxe]
-symbol = " "
-
-[hg_branch]
-symbol = " "
-
-[julia]
-symbol = " "
-style = "mauve"
-
-[kotlin]
-symbol = " "
-style = "mauve"
-
-[memory_usage]
-symbol = "󰍛 "
-
-[meson]
-symbol = "󰔷 "
-
-[nim]
-symbol = "󰆥 "
-style = "yellow"
-
-[nix_shell]
-symbol = " "
-style = "blue"
-
-[ocaml]
-symbol = " "
-style = "peach"
-
-[package]
-symbol = "󰏗 "
-
-[perl]
-symbol = " "
-
-[php]
-symbol = " "
-style = "mauve"
-
-[pijul_channel]
-symbol = " "
-
-[rlang]
-symbol = "󰟔 "
-style = "blue"
-
-[scala]
-symbol = " "
-style = "red"
-
-[swift]
-symbol = " "
-style = "peach"
-
-[zig]
-symbol = " "
-style = "peach"
-
-[gradle]
-symbol = " "
-
-[gcloud]
-disabled = true
-
-[dotnet]
-disabled = true
-
-# =============================================================================
-# OS Symbols
-# =============================================================================
-[os.symbols]
-Alpaquita = " "
-Alpine = " "
-AlmaLinux = " "
-Amazon = " "
-Android = " "
-Arch = " "
-Artix = " "
-CachyOS = " "
-CentOS = " "
-Debian = " "
-DragonFly = " "
-Emscripten = " "
-EndeavourOS = " "
-Fedora = " "
-FreeBSD = " "
-Garuda = "󰛓 "
-Gentoo = " "
-HardenedBSD = "󰞌 "
-Illumos = "󰈸 "
-Kali = " "
-Linux = " "
-Mabox = " "
-Macos = " "
-Manjaro = " "
-Mariner = " "
-MidnightBSD = " "
-Mint = " "
-NetBSD = " "
-NixOS = " "
-Nobara = " "
-OpenBSD = "󰈺 "
-openSUSE = " "
-OracleLinux = "󰌷 "
-Pop = " "
-Raspbian = " "
-Redhat = " "
-RedHatEnterprise = " "
-RockyLinux = " "
-Redox = "󰀘 "
-Solus = "󰠳 "
-SUSE = " "
-Ubuntu = " "
-Unknown = " "
-Void = " "
-Windows = "󰍲 "
-
-# =============================================================================
-# Environment Modules
-# =============================================================================
-[env_var.ZSH_STARTUP_MS]
-variable = "ZSH_STARTUP_MS"
-format = "[󱎫 ${env_value}ms]($style) "
-style = "overlay1"
-
-[env_var.BRADEN_GIT_DIRTY]
-variable = "BRADEN_GIT_DIRTY"
-format = "[$env_value]($style)"
-style = "peach"
 
 # =============================================================================
 # Color Palette (must be at the end of the file)
