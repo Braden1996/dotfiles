@@ -10,8 +10,8 @@ set -uo pipefail
 # Manage the GitHub credentials this machine uses, without ever writing a
 # private key to disk.
 #
-#   desktop         The 1Password app holds the keys and its agent signs with
-#                   them. Nothing to load; nothing to expire.
+#   desktop         The 1Password app authenticates the CLI. Keys are streamed
+#                   into the OS ssh-agent until logout.
 #   service-account The app is not installed. Keys are read from the shared
 #                   vault on demand and added to the OS ssh-agent with a
 #                   lifetime, so a revoked service account takes effect at the
@@ -20,8 +20,8 @@ set -uo pipefail
 # Keys are per-machine. One shared pair would make revocation all-or-nothing
 # and leave signatures unattributable: you could not tell which machine signed
 # a commit, nor distrust one machine without rotating every machine. Scoping
-# the vault items by hostname makes revoking a machine a single GitHub key
-# deletion.
+# the vault items by hostname means retiring one machine only requires deleting
+# that machine's default and account-specific GitHub keys.
 
 readonly BACKEND={{ $backend | quote }}
 readonly VAULT={{ $vault | quote }}
@@ -58,20 +58,6 @@ recorded_key() {
   [[ -r "$1" ]] && cat "$1"
 }
 
-# Every address this machine commits as: the default plus every identity in the
-# vault. Read at runtime rather than baked in, because the identity list is the
-# vault's to know -- baking it would let the trust store drift from the
-# identities actually in use the moment one is added.
-principals() {
-  local emails
-  emails="$DEFAULT_EMAIL"
-  local email
-  while IFS= read -r email; do
-    [[ -n "$email" ]] && emails+=$'\n'"$email"
-  done < <(identity_emails)
-  printf '%s\n' "$emails" | awk 'NF && !seen[$0]++'
-}
-
 # 1Password stores SSH keys in its own representation; this query asks for the
 # OpenSSH encoding that ssh-add understands.
 readonly PRIVATE_REFERENCE_SUFFIX='private key?ssh-format=openssh'
@@ -81,22 +67,27 @@ usage() {
 Usage: dotfiles-keys <command>
 
 Commands:
-  setup         Guided first run: check prerequisites, then generate, publish, sync
-  provision     Create+publish keys for ANOTHER machine: provision <machine> <slug> [vault]
+  setup         Guided first run for this machine's credential backend
+  provision     Create+publish keys for another machine/account
+                provision <machine> [--identity <slug>] [--vault <vault>]
+                                      [--github-user <login>]
   store-token   Store the service account token in the macOS keychain (work only)
   status        Report the credential backend, agent, and which keys are usable
   generate      Create this machine's SSH keys inside 1Password
   publish       Add this machine's public keys to your GitHub account
   sync          Write public keys, git identities and the trust store from the vault
   sync-signers  Rebuild only ~/.ssh/allowed_signers from every machine in the vault
-  identity-add  Add a git identity: identity-add <slug> <email> <owner/** | owner/repo>
+  identity-add  Add a git identity
+                identity-add <slug> <email> <owner/** | owner/repo>
+                             [--vault <vault>]
   load          Read this machine's keys from 1Password into the ssh-agent
   unload        Drop the loaded keys from the ssh-agent
   token         Print the GitHub token from the vault, for GH_TOKEN
 
-Keys are per-machine, named for this host, so revoking one machine is a single
-GitHub key deletion. Private keys are never written to disk: `generate` creates
-them inside 1Password and `load` streams them straight into the agent.
+Keys are per-machine, named for this host, so retiring one machine does not
+rotate any other machine's credentials. Private keys are never written to
+disk: `generate` creates them inside 1Password and `load` streams them straight
+into the agent.
 USAGE
 }
 
@@ -209,13 +200,23 @@ resolve_vault_id() {
 resolve_item_id() {
   local vault_id
   vault_id="$(resolve_vault_id)" || return 1
-  op_run item get "$1" --vault "$vault_id" --format json 2>/dev/null |
-    jq -r '.id // empty'
+  local item
+  item="$(op_run item get "$1" --vault "$vault_id" --format json 2>/dev/null)" ||
+    return 1
+  jq -r '.id // empty' <<<"$item"
 }
 
-# An identity that owns credentials on a separate GitHub account stores them
-# under the machine name plus the identity slug. Keeping the naming in one
-# place means `provision` on one machine and `sync` on another cannot drift.
+# The default GitHub account uses the base machine title. An identity that owns
+# credentials on a separate account adds its slug. Keeping both forms here
+# means `provision` on one machine and `sync` on another cannot drift.
+machine_item_title() {
+  local kind="$1" machine="$2"
+  case "$kind" in
+    auth) printf '%s (%s)' "$AUTH_ITEM_PREFIX" "$machine" ;;
+    sign) printf '%s (%s)' "$SIGN_ITEM_PREFIX" "$machine" ;;
+  esac
+}
+
 account_item_title() {
   local kind="$1" machine="$2" slug="$3"
   case "$kind" in
@@ -236,6 +237,36 @@ read_public_key() {
   local vault_id
   vault_id="$(resolve_vault_id)" || return 1
   op_run item get "$1" --vault "$vault_id" --fields label="$PUBLIC_FIELD" 2>/dev/null
+}
+
+read_public_key_from() {
+  local item="$1" vault="$2"
+  op_run item get "$item" --vault "$vault" --fields label="$PUBLIC_FIELD" --reveal 2>/dev/null
+}
+
+vault_items_json() {
+  local vault_id
+  vault_id="$(resolve_vault_id)" || return 1
+  op_run item list --vault "$vault_id" --format json 2>/dev/null
+}
+
+item_id_from_json() {
+  local items="$1" title="$2"
+  local matches count
+  matches="$(jq -r --arg title "$title" \
+    '.[] | select(.title == $title) | .id' <<<"$items")" || return 1
+  count="$(awk 'NF { count++ } END { print count + 0 }' <<<"$matches")"
+  if [[ "$count" -gt 1 ]]; then
+    fail "duplicate 1Password items named '$title'; refusing an arbitrary key"
+    return 1
+  fi
+  printf '%s' "$matches"
+}
+
+item_title_exists_in_json() {
+  local items="$1" title="$2"
+  jq -e --arg title "$title" \
+    'any(.[]; .title == $title)' <<<"$items" >/dev/null
 }
 
 # Compare against the agent by key body only: comments differ between what
@@ -266,6 +297,7 @@ agent_available() {
 
 cmd_status() {
   local exit_code=0
+  require_safe_machine || exit_code=1
 
   printf 'Credential backend\n'
   note "backend: $BACKEND"
@@ -359,6 +391,40 @@ cmd_status() {
     warn "the agent does not hold the signing key; run: dotfiles-keys load"
   fi
 
+  local account_auth_file account_sign_file account_slug account_auth_key account_sign_key
+  for account_auth_file in "$SSH_DIR"/id_github_auth_*.pub; do
+    [[ -e "$account_auth_file" ]] || continue
+    account_slug="${account_auth_file##*/id_github_auth_}"
+    account_slug="${account_slug%.pub}"
+    account_sign_file="$SSH_DIR/id_github_sign_$account_slug.pub"
+    if [[ ! -r "$account_sign_file" ]]; then
+      fail "identity '$account_slug' has an auth public key but no signing public key"
+      exit_code=1
+      continue
+    fi
+    account_auth_key="$(recorded_key "$account_auth_file")"
+    account_sign_key="$(recorded_key "$account_sign_file")"
+    if agent_holds_key "$account_auth_key"; then
+      pass "the agent holds the '$account_slug' authentication key"
+    else
+      warn "the agent does not hold the '$account_slug' authentication key; run: dotfiles-keys load"
+    fi
+    if agent_holds_key "$account_sign_key"; then
+      pass "the agent holds the '$account_slug' signing key"
+    else
+      warn "the agent does not hold the '$account_slug' signing key; run: dotfiles-keys load"
+    fi
+  done
+  for account_sign_file in "$SSH_DIR"/id_github_sign_*.pub; do
+    [[ -e "$account_sign_file" ]] || continue
+    account_slug="${account_sign_file##*/id_github_sign_}"
+    account_slug="${account_slug%.pub}"
+    if [[ ! -r "$SSH_DIR/id_github_auth_$account_slug.pub" ]]; then
+      fail "identity '$account_slug' has a signing public key but no auth public key"
+      exit_code=1
+    fi
+  done
+
   return "$exit_code"
 }
 
@@ -369,10 +435,11 @@ cmd_status() {
 setup_preflight() {
   local ready=0
 
+  require_safe_machine || ready=1
   require_command op || ready=1
   require_command jq || ready=1
   require_command ssh-add || ready=1
-  if ! command -v gh >/dev/null 2>&1; then
+  if [[ "$BACKEND" == "desktop" ]] && ! command -v gh >/dev/null 2>&1; then
     fail "gh is required to publish the public keys to GitHub"
     ready=1
   fi
@@ -424,30 +491,32 @@ setup_preflight() {
   fi
   pass "vault is reachable: $VAULT"
 
-  if ! gh auth status >/dev/null 2>&1; then
-    fail "gh is not authenticated; run: gh auth login"
-    return 1
-  fi
-  pass "gh is authenticated"
+  if [[ "$BACKEND" == "desktop" ]]; then
+    if ! gh auth status >/dev/null 2>&1; then
+      fail "gh is not authenticated; run: gh auth login"
+      return 1
+    fi
+    pass "gh is authenticated"
 
-  # Without this scope `publish` gets half way: the auth key lands on GitHub and
-  # the signing key does not. Offer to fix it now rather than failing later.
-  if ! gh auth status 2>&1 | grep -q 'admin:ssh_signing_key'; then
-    warn "gh lacks the admin:ssh_signing_key scope, so the signing key cannot be added"
-    if [[ -t 0 ]]; then
-      local reply
-      read -r -p "     Run 'gh auth refresh -h github.com -s admin:ssh_signing_key' now? [y/N] " reply
-      if [[ "$reply" =~ ^[Yy] ]]; then
-        gh auth refresh -h github.com -s admin:ssh_signing_key || {
-          fail "the scope refresh failed"
-          return 1
-        }
-        pass "gh now holds the signing-key scope"
+    # Without this scope `publish` gets half way: the auth key lands on GitHub
+    # and the signing key does not. Offer to fix it before creating anything.
+    if ! gh auth status 2>&1 | grep -q 'admin:ssh_signing_key'; then
+      warn "gh lacks the admin:ssh_signing_key scope, so the signing key cannot be added"
+      if [[ -t 0 ]]; then
+        local reply
+        read -r -p "     Run 'gh auth refresh -h github.com -s admin:ssh_signing_key' now? [y/N] " reply
+        if [[ "$reply" =~ ^[Yy] ]]; then
+          gh auth refresh -h github.com -s admin:ssh_signing_key || {
+            fail "the scope refresh failed"
+            return 1
+          }
+          pass "gh now holds the signing-key scope"
+        else
+          note "Skipped. The signing key will not be published."
+        fi
       else
-        note "Skipped. The signing key will not be published."
+        note "Fix with: gh auth refresh -h github.com -s admin:ssh_signing_key"
       fi
-    else
-      note "Fix with: gh auth refresh -h github.com -s admin:ssh_signing_key"
     fi
   fi
 
@@ -461,11 +530,16 @@ cmd_setup() {
   printf 'Checking prerequisites\n'
   setup_preflight || return 1
 
-  printf '\nCreating this machine'"'"'s keys in 1Password\n'
-  cmd_generate || return 1
+  if [[ "$BACKEND" == "desktop" ]]; then
+    printf '\nCreating this machine'"'"'s keys in 1Password\n'
+    cmd_generate || return 1
 
-  printf '\nPublishing public keys to GitHub\n'
-  cmd_publish || return 1
+    printf '\nPublishing public keys to GitHub\n'
+    cmd_publish || return 1
+  else
+    note "This service account is read-only; keys must already have been"
+    note "provisioned from a desktop-authenticated machine."
+  fi
 
   printf '\nWriting local key files and the trust store\n'
   cmd_sync || return 1
@@ -491,9 +565,85 @@ GitHub token for `gh` on machines that cannot log in interactively -- see
 DONE
 }
 
+ensure_ssh_item() {
+  local item="$1" vault="$2" probe probe_status=0
+  probe="$(op_run item get "$item" --vault "$vault" --format json 2>&1)" ||
+    probe_status=$?
+  if [[ "$probe_status" -eq 0 ]]; then
+    pass "already exists in $vault: $item"
+    return 0
+  fi
+  if ! grep -qiE "isn't an item|not found|no item matches" <<<"$probe"; then
+    fail "could not determine whether $item exists in $vault"
+    printf '%s\n' "$probe" | sed 's/^/     /' >&2
+    return 1
+  fi
+  printf 'Creating %s in %s...\n' "$item" "$vault"
+  # 1Password generates the key itself, so the private half is created inside
+  # the vault and never exists on this filesystem.
+  if op_run item create \
+    --category ssh \
+    --title "$item" \
+    --vault "$vault" \
+    --ssh-generate-key ed25519 >/dev/null; then
+    pass "created $item"
+  else
+    fail "could not create $item"
+    return 1
+  fi
+}
+
+github_key_endpoint() {
+  case "$1" in
+    authentication) printf 'user/keys' ;;
+    signing) printf 'user/ssh_signing_keys' ;;
+  esac
+}
+
+publish_key_to_github() {
+  local item="$1" vault="$2" key_type="$3" title="$4"
+  local public_key endpoint published key_file exit_code=0
+
+  public_key="$(read_public_key_from "$item" "$vault")"
+  if [[ -z "$public_key" ]]; then
+    fail "could not read the public key for $item from $vault"
+    return 1
+  fi
+
+  # Make reruns genuinely idempotent. `gh ssh-key add` reports an already
+  # published key as an error, which should not turn successful provisioning
+  # into a warning or encourage duplicate items.
+  endpoint="$(github_key_endpoint "$key_type")"
+  if published="$(gh api --paginate "$endpoint" --jq '.[].key' 2>/dev/null)"; then
+    local wanted candidate
+    wanted="$(key_body "$public_key")"
+    while IFS= read -r candidate; do
+      if [[ "$(key_body "$candidate")" == "$wanted" ]]; then
+        pass "$key_type key is already on GitHub: $title"
+        return 0
+      fi
+    done <<<"$published"
+  else
+    warn "could not list existing $key_type keys; attempting to publish"
+  fi
+
+  # Public keys are not secrets, but gh wants a file rather than stdin.
+  key_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-keys.XXXXXX")" || return 1
+  printf '%s\n' "$public_key" >"$key_file"
+  if gh ssh-key add "$key_file" --type "$key_type" --title "$title"; then
+    pass "added $key_type key to GitHub: $title"
+  else
+    fail "could not add the $key_type key"
+    exit_code=1
+  fi
+  rm -f -- "$key_file"
+  return "$exit_code"
+}
+
 cmd_generate() {
   require_command op || return 1
   require_vault || return 1
+  require_safe_machine || return 1
 
   if [[ "$BACKEND" == "service-account" ]]; then
     fail "refusing to create items with a service account"
@@ -502,36 +652,9 @@ cmd_generate() {
     return 1
   fi
 
-  local item probe probe_status
+  local item
   for item in "$AUTH_ITEM" "$SIGN_ITEM"; do
-    # Distinguish "no such item" from "the lookup itself failed". Treating any
-    # non-zero exit as absence would create a second item with the same title
-    # on a network blip or an auth prompt, and a duplicate title makes every
-    # later `op read` ambiguous.
-    probe_status=0
-    probe="$(op_run item get "$item" --vault "$VAULT" 2>&1)" || probe_status=$?
-    if [[ "$probe_status" -eq 0 ]]; then
-      pass "already exists in $VAULT: $item"
-      continue
-    fi
-    if ! grep -qiE "isn't an item|not found|no item matches" <<<"$probe"; then
-      fail "could not determine whether $item exists in $VAULT"
-      printf '%s\n' "$probe" | sed 's/^/     /' >&2
-      return 1
-    fi
-    printf 'Creating %s in %s...\n' "$item" "$VAULT"
-    # 1Password generates the key itself, so the private half is created inside
-    # the vault and never exists on this filesystem.
-    if op item create \
-      --category ssh \
-      --title "$item" \
-      --vault "$VAULT" \
-      --ssh-generate-key ed25519 >/dev/null; then
-      pass "created $item"
-    else
-      fail "could not create $item"
-      return 1
-    fi
+    ensure_ssh_item "$item" "$VAULT" || return 1
   done
 
   note "Next: dotfiles-keys publish, then dotfiles-keys sync"
@@ -541,7 +664,13 @@ cmd_publish() {
   require_command op || return 1
   require_command gh || return 1
   require_vault || return 1
+  require_safe_machine || return 1
 
+  if [[ "$BACKEND" == "service-account" ]]; then
+    fail "refusing to publish keys from a service-account machine"
+    note "Publish with 'dotfiles-keys provision' from a trusted personal machine."
+    return 1
+  fi
   if ! gh auth status >/dev/null 2>&1; then
     fail "gh is not authenticated; run: gh auth login"
     return 1
@@ -550,39 +679,19 @@ cmd_publish() {
   local hostname
   hostname="$(uname -n)"
 
-  publish_one() {
-    local item="$1" key_type="$2" title="$3"
-    local public_key key_file exit_code=0
-
-    public_key="$(read_public_key "$item")"
-    if [[ -z "$public_key" ]]; then
-      fail "could not read the public key for $item from $VAULT"
-      return 1
-    fi
-
-    # Public keys are not secrets, but gh wants a file rather than stdin.
-    key_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-keys.XXXXXX")" || return 1
-    printf '%s\n' "$public_key" >"$key_file"
-    if gh ssh-key add "$key_file" --type "$key_type" --title "$title"; then
-      pass "added $key_type key to GitHub: $title"
-    else
-      fail "could not add the $key_type key; it may already be present"
-      exit_code=1
-    fi
-    rm -f -- "$key_file"
-    return "$exit_code"
-  }
-
   # Report a real exit status: a caller scripting this needs to know the keys
   # did not reach GitHub, and a silent success here means unverified commits
   # and a machine that cannot authenticate.
   local exit_code=0
-  publish_one "$AUTH_ITEM" authentication "$AUTH_ITEM ($hostname)" || exit_code=1
-  publish_one "$SIGN_ITEM" signing "$SIGN_ITEM ($hostname)" || {
+  publish_key_to_github "$SIGN_ITEM" "$VAULT" signing "$SIGN_ITEM ($hostname)" || {
     exit_code=1
     note "Signing keys need the admin:ssh_signing_key scope."
     note "Run: gh auth refresh -h github.com -s admin:ssh_signing_key"
   }
+  if [[ "$exit_code" -eq 0 ]]; then
+    publish_key_to_github "$AUTH_ITEM" "$VAULT" authentication "$AUTH_ITEM ($hostname)" ||
+      exit_code=1
+  fi
   return "$exit_code"
 }
 
@@ -603,6 +712,7 @@ write_public_key() {
 cmd_sync() {
   require_command op || return 1
   require_vault || return 1
+  require_safe_machine || return 1
 
   local auth_key sign_key
   auth_key="$(read_public_key "$AUTH_ITEM")"
@@ -611,7 +721,12 @@ cmd_sync() {
   if [[ -z "$auth_key" || -z "$sign_key" ]]; then
     fail "could not read this machine's public keys from $VAULT"
     note "Expected items: '$AUTH_ITEM' and '$SIGN_ITEM'."
-    note "Run 'dotfiles-keys generate' on this machine first."
+    if [[ "$BACKEND" == "service-account" ]]; then
+      note "Provision the default pair from a desktop-authenticated machine."
+      note "Run: dotfiles-keys provision $MACHINE --vault '$VAULT'"
+    else
+      note "Run 'dotfiles-keys generate' on this machine first."
+    fi
     return 1
   fi
 
@@ -626,14 +741,20 @@ cmd_sync() {
 }
 
 # Identity items are read from the vault this machine is configured for, and
-# only that vault. That is the whole scoping mechanism: a work machine cannot
-# see a personal identity because it cannot read the vault holding it.
-identity_rows() {
-  require_vault || return 1
-  local vault_id items
-  vault_id="$(resolve_vault_id)" || return 1
-  if ! items="$(op_run item list --vault "$vault_id" --format json 2>/dev/null)"; then
-    fail "could not list items in $VAULT"
+# only that vault. That is the scoping mechanism: a machine sees only identities
+# deliberately placed inside its trust boundary.
+identity_rows_from_json() {
+  local items="$1"
+  local duplicates
+  duplicates="$(jq -r --arg prefix "$IDENTITY_PREFIX" '
+    [.[] | select(.title | startswith($prefix + " ("))]
+    | group_by(.title)[]
+    | select(length > 1)
+    | .[0].title
+  ' <<<"$items")" || return 1
+  if [[ -n "$duplicates" ]]; then
+    fail "duplicate git identity titles in $VAULT:"
+    printf '%s\n' "$duplicates" | sed 's/^/     /' >&2
     return 1
   fi
   # id<TAB>slug, sorted by slug so overlapping scopes resolve deterministically:
@@ -643,6 +764,16 @@ identity_rows() {
     | select(.title | startswith($prefix + " ("))
     | "\(.id)\t\(.title | sub("^" + $prefix + " \\("; "") | sub("\\)$"; ""))"
   ' <<<"$items" | sort -t"$(printf '\t')" -k2
+}
+
+identity_rows() {
+  require_vault || return 1
+  local items
+  if ! items="$(vault_items_json)"; then
+    fail "could not list items in $VAULT"
+    return 1
+  fi
+  identity_rows_from_json "$items"
 }
 
 # --reveal is required for fields stored as CONCEALED. New identities are
@@ -655,12 +786,37 @@ identity_field() {
   op_run item get "$1" --vault "$vault_id" --fields label="$2" --reveal 2>/dev/null
 }
 
-identity_emails() {
-  local item_id slug
-  while IFS="$(printf '\t')" read -r item_id slug; do
-    [[ -n "$item_id" ]] || continue
-    identity_field "$item_id" "$IDENTITY_EMAIL_FIELD"
-  done < <(identity_rows 2>/dev/null)
+valid_slug() {
+  [[ "$1" == [A-Za-z0-9]* ]] && [[ "$1" != *[!A-Za-z0-9._-]* ]]
+}
+
+require_safe_machine() {
+  if ! valid_slug "$MACHINE"; then
+    fail "configured machine name '$MACHINE' is unsafe for key item titles"
+    note "Use letters, numbers, dot, underscore and hyphen, starting with a"
+    note "letter or number. Fix it with: chezmoi init --prompt"
+    return 1
+  fi
+}
+
+valid_email() {
+  # allowed_signers treats `*`, `?`, `!` and comma as pattern syntax. A
+  # conservative address grammar keeps an identity email a literal principal.
+  [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]]
+}
+
+valid_scope_list() {
+  local scope one found=0
+  scope="$1"
+  while IFS= read -r one; do
+    [[ -n "$one" ]] || continue
+    [[ "$one" != *[[:space:]]* ]] || return 1
+    if ! [[ "$one" =~ ^[A-Za-z0-9_.-]+/(\*\*|[A-Za-z0-9_.-]+)$ ]]; then
+      return 1
+    fi
+    found=1
+  done <<<"$scope"
+  [[ "$found" -eq 1 ]]
 }
 
 # A scope is either "owner/**" for a whole org or "owner/repo" for one repo.
@@ -689,22 +845,117 @@ emit_scope_rules() {
   done
 }
 
-# Run on a machine signed in to the GitHub account the keys should belong to.
-# A work laptop cannot create keys for a personal GitHub account without
-# logging that account in there, which is exactly what this avoids: the keys
-# are made here, published here, and only ever read over there.
+# Run on a desktop-authenticated machine signed in to the GitHub account the
+# keys should belong to. With no identity this creates the target machine's
+# default pair; --identity creates a separate account pair for that identity.
+# The legacy positional form `provision <machine> <slug> [vault]` remains
+# accepted so existing notes and shell history do not suddenly do the wrong
+# thing.
 cmd_provision() {
   require_command op || return 1
   require_command gh || return 1
+  require_command jq || return 1
 
-  local machine="${1:-}" slug="${2:-}" vault="${3:-$VAULT}"
-  if [[ -z "$machine" || -z "$slug" ]]; then
-    fail "usage: dotfiles-keys provision <machine-name> <identity-slug> [vault]"
-    note "Example: dotfiles-keys provision work-macbook personal 'Braden<>Work'"
+  case "${1:-}" in
+    -h | --help)
+      note "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+      note "       [--vault <vault>] [--github-user <login>]"
+      return 0
+      ;;
+    "")
+      fail "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+      note "       [--vault <vault>] [--github-user <login>]"
+      return 2
+      ;;
+    -*)
+      fail "machine name cannot be an option: $1"
+      return 2
+      ;;
+  esac
+
+  local machine="${1:-}"
+  shift
+  local slug="" vault="$VAULT" expected_user=""
+  local identity_set=0 vault_set=0 github_user_set=0
+
+  while (($# > 0)); do
+    case "$1" in
+      --identity)
+        if [[ "$identity_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--identity needs exactly one slug"
+          return 2
+        fi
+        slug="$2"
+        identity_set=1
+        shift 2
+        ;;
+      --vault)
+        if [[ "$vault_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--vault needs exactly one vault name or ID"
+          return 2
+        fi
+        vault="$2"
+        vault_set=1
+        shift 2
+        ;;
+      --github-user)
+        if [[ "$github_user_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--github-user needs exactly one login"
+          return 2
+        fi
+        expected_user="$2"
+        github_user_set=1
+        shift 2
+        ;;
+      -h | --help)
+        note "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+        note "       [--vault <vault>] [--github-user <login>]"
+        return 0
+        ;;
+      -*)
+        fail "unknown provision option: $1"
+        return 2
+        ;;
+      *)
+        # Backwards compatibility: the old command used positional slug and
+        # vault arguments. A default pair has no positional arguments.
+        if [[ "$identity_set" -eq 0 ]]; then
+          slug="$1"
+          identity_set=1
+        elif [[ "$vault_set" -eq 0 ]]; then
+          vault="$1"
+          vault_set=1
+        else
+          fail "too many provision arguments"
+          return 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$machine" || -z "$vault" ]]; then
+    fail "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+    note "       [--vault <vault>] [--github-user <login>]"
+    return 1
+  fi
+  if ! valid_slug "$machine"; then
+    fail "machine names must start with a letter or number and contain only"
+    note "letters, numbers, dot, underscore and hyphen"
+    return 1
+  fi
+  if [[ "$identity_set" -eq 1 ]] && ! valid_slug "$slug"; then
+    fail "identity slugs must start with a letter or number and contain only"
+    note "letters, numbers, dot, underscore and hyphen"
+    return 1
+  fi
+  if [[ "$github_user_set" -eq 1 && "$expected_user" == *[[:space:]]* ]]; then
+    fail "GitHub login cannot contain whitespace"
     return 1
   fi
   if [[ "$BACKEND" == "service-account" ]]; then
     fail "refusing to create items with a read-only service account"
+    note "Run provision on a machine authenticated through the 1Password app."
     return 1
   fi
   if ! gh auth status >/dev/null 2>&1; then
@@ -714,49 +965,54 @@ cmd_provision() {
 
   local account
   account="$(gh api user --jq .login 2>/dev/null)"
-  note "Publishing to GitHub account: ${account:-unknown}"
+  if [[ -z "$account" ]]; then
+    fail "could not identify the active GitHub account"
+    return 1
+  fi
+  local normalized_account normalized_expected_user
+  normalized_account="$(tr '[:upper:]' '[:lower:]' <<<"$account")"
+  normalized_expected_user="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
+  if [[ "$github_user_set" -eq 1 ]] &&
+    [[ "$normalized_account" != "$normalized_expected_user" ]]; then
+    fail "active GitHub account is '$account', expected '$expected_user'"
+    note "Switch first: gh auth switch -h github.com -u $expected_user"
+    return 1
+  fi
+  note "Publishing to GitHub account: $account"
 
-  local kind title existing
+  local kind title
   for kind in auth sign; do
-    title="$(account_item_title "$kind" "$machine" "$slug")"
-    existing="$(op_run item list --vault "$vault" --format json 2>/dev/null |
-      jq -r --arg t "$title" '.[] | select(.title == $t) | .id' | head -1)"
-    if [[ -n "$existing" ]]; then
-      pass "already exists: $title"
-      continue
-    fi
-    if op_run item create --category ssh --title "$title" --vault "$vault" \
-      --ssh-generate-key ed25519 >/dev/null; then
-      pass "created $title in $vault"
+    if [[ -n "$slug" ]]; then
+      title="$(account_item_title "$kind" "$machine" "$slug")"
     else
-      fail "could not create $title"
-      return 1
+      title="$(machine_item_title "$kind" "$machine")"
     fi
+    ensure_ssh_item "$title" "$vault" || return 1
   done
 
   # Publish to whichever account gh is logged in as -- that is the whole point
-  # of running this here rather than on the target machine.
-  local key_type key_file public_key
-  for kind in auth sign; do
-    title="$(account_item_title "$kind" "$machine" "$slug")"
-    [[ "$kind" == auth ]] && key_type=authentication || key_type=signing
-    public_key="$(op_run item get "$title" --vault "$vault" --fields label="$PUBLIC_FIELD" --reveal 2>/dev/null)"
-    if [[ -z "$public_key" ]]; then
-      fail "could not read the public key for $title"
-      return 1
-    fi
-    key_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-provision.XXXXXX")" || return 1
-    printf '%s\n' "$public_key" >"$key_file"
-    if gh ssh-key add "$key_file" --type "$key_type" --title "$title"; then
-      pass "added $key_type key to ${account:-GitHub}"
+  # of running this here rather than on the target machine. Publish signing
+  # first: a missing signing-key scope then fails before an auth-only setup.
+  local key_type exit_code=0
+  for kind in sign auth; do
+    if [[ -n "$slug" ]]; then
+      title="$(account_item_title "$kind" "$machine" "$slug")"
     else
-      warn "could not add the $key_type key; it may already be present"
-      [[ "$kind" == sign ]] && note "Signing keys need: gh auth refresh -h github.com -s admin:ssh_signing_key"
+      title="$(machine_item_title "$kind" "$machine")"
     fi
-    rm -f -- "$key_file"
+    [[ "$kind" == auth ]] && key_type=authentication || key_type=signing
+    publish_key_to_github "$title" "$vault" "$key_type" "$title" || {
+      exit_code=1
+      [[ "$kind" == sign ]] &&
+        note "Signing keys need: gh auth refresh -h github.com -s admin:ssh_signing_key"
+      break
+    }
   done
 
-  note "On $machine, run: dotfiles-keys sync"
+  if [[ "$exit_code" -eq 0 ]]; then
+    note "On $machine, run: dotfiles-keys sync && dotfiles-keys load"
+  fi
+  return "$exit_code"
 }
 
 cmd_sync_identities() {
@@ -764,43 +1020,85 @@ cmd_sync_identities() {
   require_command jq || return 1
   require_vault || return 1
 
-  local rows
-  rows="$(identity_rows)" || return 1
+  local items rows
+  if ! items="$(vault_items_json)"; then
+    fail "could not list items in $VAULT"
+    return 1
+  fi
+  rows="$(identity_rows_from_json "$items")" || return 1
 
-  local staged_include staged_dir
-  staged_include="$(mktemp "${TMPDIR:-/tmp}/identities.XXXXXX")" || return 1
-  staged_dir="$(mktemp -d "${TMPDIR:-/tmp}/identity-dir.XXXXXX")" || return 1
+  local staged_root staged_include staged_identity_dir staged_ssh_dir
+  staged_root="$(mktemp -d "${TMPDIR:-/tmp}/identity-sync.XXXXXX")" || return 1
+  staged_include="$staged_root/identities.gitconfig"
+  staged_identity_dir="$staged_root/identities"
+  staged_ssh_dir="$staged_root/ssh"
+  mkdir -p "$staged_identity_dir" "$staged_ssh_dir/config.d"
 
   {
     printf '# Generated by dotfiles-keys sync. Edits are lost.\n'
     printf '# Identities come from the 1Password vault: %s\n\n' "$VAULT"
   } >"$staged_include"
 
-  rm -rf -- "$SSH_INCLUDE_DIR"
-  mkdir -p "$SSH_INCLUDE_DIR"
-  chmod 700 "$SSH_INCLUDE_DIR"
-
   local item_id slug email scope count=0
   while IFS="$(printf '\t')" read -r item_id slug; do
     [[ -n "$item_id" ]] || continue
-    email="$(identity_field "$item_id" "$IDENTITY_EMAIL_FIELD")"
-    scope="$(identity_field "$item_id" "$IDENTITY_SCOPE_FIELD")"
+    if ! valid_slug "$slug"; then
+      fail "identity slug '$slug' is unsafe; use letters, numbers, dot, underscore or hyphen"
+      rm -rf -- "$staged_root"
+      return 1
+    fi
+    if ! email="$(identity_field "$item_id" "$IDENTITY_EMAIL_FIELD")" ||
+      ! scope="$(identity_field "$item_id" "$IDENTITY_SCOPE_FIELD")"; then
+      fail "could not read identity '$slug'; existing routing was kept"
+      rm -rf -- "$staged_root"
+      return 1
+    fi
     if [[ -z "$email" || -z "$scope" ]]; then
       warn "skipping identity '$slug': needs both $IDENTITY_EMAIL_FIELD and $IDENTITY_SCOPE_FIELD"
       continue
+    fi
+    if ! valid_email "$email"; then
+      fail "identity '$slug' has an invalid email address"
+      rm -rf -- "$staged_root"
+      return 1
+    fi
+    if ! valid_scope_list "$scope"; then
+      fail "identity '$slug' has an invalid scope; use owner/** or owner/repo"
+      rm -rf -- "$staged_root"
+      return 1
     fi
 
     # Does this identity own credentials on a separate GitHub account? The
     # presence of its key items in the vault is the signal -- nothing to
     # configure, `provision` simply creates them.
-    local alias_host="" auth_key sign_key
-    auth_key="$(read_public_key "$(account_item_title auth "$MACHINE" "$slug")")"
-    sign_key="$(read_public_key "$(account_item_title sign "$MACHINE" "$slug")")"
-    if [[ -n "$auth_key" && -n "$sign_key" ]]; then
+    local alias_host="" auth_title sign_title auth_id sign_id auth_key sign_key
+    auth_title="$(account_item_title auth "$MACHINE" "$slug")"
+    sign_title="$(account_item_title sign "$MACHINE" "$slug")"
+    if ! auth_id="$(item_id_from_json "$items" "$auth_title")" ||
+      ! sign_id="$(item_id_from_json "$items" "$sign_title")"; then
+      rm -rf -- "$staged_root"
+      return 1
+    fi
+    if { [[ -n "$auth_id" ]] && [[ -z "$sign_id" ]]; } ||
+      { [[ -z "$auth_id" ]] && [[ -n "$sign_id" ]]; }; then
+      fail "identity '$slug' has only one account key in $VAULT"
+      note "Expected both '$auth_title' and '$sign_title'; existing routing was kept."
+      rm -rf -- "$staged_root"
+      return 1
+    fi
+    if [[ -n "$auth_id" && -n "$sign_id" ]]; then
+      auth_key="$(read_public_key "$auth_id")"
+      sign_key="$(read_public_key "$sign_id")"
+      if [[ -z "$auth_key" || -z "$sign_key" ]]; then
+        fail "could not read both account keys for identity '$slug'"
+        rm -rf -- "$staged_root"
+        return 1
+      fi
       alias_host="github-$slug"
-      write_public_key "$SSH_DIR/id_github_auth_$slug.pub" "$auth_key" || return 1
-      write_public_key "$SSH_DIR/id_github_sign_$slug.pub" "$sign_key" || return 1
-      cat >"$SSH_INCLUDE_DIR/10-$slug.conf" <<SSHCONF
+      printf '%s\n' "$auth_key" >"$staged_ssh_dir/id_github_auth_$slug.pub"
+      printf '%s\n' "$sign_key" >"$staged_ssh_dir/id_github_sign_$slug.pub"
+      chmod 644 "$staged_ssh_dir/id_github_auth_$slug.pub" "$staged_ssh_dir/id_github_sign_$slug.pub"
+      cat >"$staged_ssh_dir/config.d/10-$slug.conf" <<SSHCONF
 # Generated by dotfiles-keys sync. Edits are lost.
 Host $alias_host
   HostName github.com
@@ -808,7 +1106,7 @@ Host $alias_host
   IdentityFile ~/.ssh/id_github_auth_$slug.pub
   IdentitiesOnly yes
 SSHCONF
-      chmod 600 "$SSH_INCLUDE_DIR/10-$slug.conf"
+      chmod 600 "$staged_ssh_dir/config.d/10-$slug.conf"
     fi
 
     {
@@ -818,7 +1116,8 @@ SSHCONF
       if [[ -n "$alias_host" ]]; then
         printf '[user]\n\tsigningkey = ~/.ssh/id_github_sign_%s.pub\n' "$slug"
       fi
-    } >"$staged_dir/$slug.gitconfig"
+    } >"$staged_identity_dir/$slug.gitconfig"
+    chmod 600 "$staged_identity_dir/$slug.gitconfig"
 
     # One item may carry several scopes, one per line.
     local one
@@ -830,14 +1129,31 @@ SSHCONF
     count=$((count + 1))
   done <<<"$rows"
 
-  # Replace wholesale so an identity removed from the vault disappears here too.
+  # Validation and all vault reads completed before this point. Replace the
+  # generated state wholesale so an incomplete pair or transient vault error
+  # cannot erase the last working routing.
+  mkdir -p "$SSH_DIR" "$(dirname "$IDENTITY_INCLUDE")"
+  chmod 700 "$SSH_DIR"
+  local old_key staged_key
+  for old_key in \
+    "$SSH_DIR"/id_github_auth_*.pub \
+    "$SSH_DIR"/id_github_sign_*.pub; do
+    [[ -e "$old_key" ]] && rm -f -- "$old_key"
+  done
+  for staged_key in \
+    "$staged_ssh_dir"/id_github_auth_*.pub \
+    "$staged_ssh_dir"/id_github_sign_*.pub; do
+    [[ -e "$staged_key" ]] && mv -- "$staged_key" "$SSH_DIR/"
+  done
+
+  rm -rf -- "$SSH_INCLUDE_DIR"
+  mv -- "$staged_ssh_dir/config.d" "$SSH_INCLUDE_DIR"
+  chmod 700 "$SSH_INCLUDE_DIR"
+
   rm -rf -- "$IDENTITY_DIR"
-  mkdir -p "$IDENTITY_DIR" "$(dirname "$IDENTITY_INCLUDE")"
-  if ((count > 0)); then
-    cp -- "$staged_dir"/*.gitconfig "$IDENTITY_DIR/"
-  fi
+  mv -- "$staged_identity_dir" "$IDENTITY_DIR"
   mv -- "$staged_include" "$IDENTITY_INCLUDE"
-  rm -rf -- "$staged_dir"
+  rm -rf -- "$staged_root"
   chmod 600 "$IDENTITY_INCLUDE"
 
   pass "wrote $count git identity(ies) from $VAULT"
@@ -845,11 +1161,65 @@ SSHCONF
 
 cmd_identity_add() {
   require_command op || return 1
-  require_vault || return 1
+  require_command jq || return 1
+
+  case "${1:-}" in
+    -h | --help)
+      note "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+      note "       [--vault <vault>]"
+      return 0
+      ;;
+  esac
 
   local slug="${1:-}" email="${2:-}" scope="${3:-}"
+  if (($# >= 3)); then
+    shift 3
+  else
+    set --
+  fi
+  local vault="$VAULT" vault_set=0
+  while (($# > 0)); do
+    case "$1" in
+      --vault)
+        if [[ "$vault_set" -eq 1 || $# -lt 2 ]]; then
+          fail "--vault needs exactly one vault name or ID"
+          return 2
+        fi
+        vault="$2"
+        vault_set=1
+        shift 2
+        ;;
+      -h | --help)
+        note "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+        note "       [--vault <vault>]"
+        return 0
+        ;;
+      *)
+        fail "unknown identity-add option or argument: $1"
+        return 2
+        ;;
+    esac
+  done
+
   if [[ -z "$slug" || -z "$email" || -z "$scope" ]]; then
     fail "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+    note "       [--vault <vault>]"
+    return 1
+  fi
+  if [[ -z "$vault" ]]; then
+    fail "no target vault; pass --vault or run: chezmoi init --prompt"
+    return 1
+  fi
+  if ! valid_slug "$slug"; then
+    fail "identity slugs may contain only letters, numbers, dot, underscore and hyphen"
+    return 1
+  fi
+  if ! valid_email "$email"; then
+    fail "identity email is not valid: $email"
+    return 1
+  fi
+  if ! valid_scope_list "$scope"; then
+    fail "identity scope must be owner/** or owner/repo"
     return 1
   fi
   if [[ "$BACKEND" == "service-account" ]]; then
@@ -862,17 +1232,29 @@ cmd_identity_add() {
   # back yields a placeholder rather than the value. Neither an email nor a
   # repo glob is a secret.
   local title="$IDENTITY_PREFIX ($slug)"
-  local existing
-  existing="$(resolve_item_id "$title" 2>/dev/null)"
+  local existing="" probe probe_status=0
+  probe="$(op_run item get "$title" --vault "$vault" --format json 2>&1)" ||
+    probe_status=$?
+  if [[ "$probe_status" -eq 0 ]]; then
+    existing="$(jq -r '.id // empty' <<<"$probe")"
+    if [[ -z "$existing" ]]; then
+      fail "the existing identity item has no ID: $title"
+      return 1
+    fi
+  elif ! grep -qiE "isn't an item|not found|no item matches" <<<"$probe"; then
+    fail "could not determine whether $title exists in $vault"
+    printf '%s\n' "$probe" | sed 's/^/     /' >&2
+    return 1
+  fi
 
   if [[ -n "$existing" ]]; then
     # Update rather than create: a second item with the same title makes every
     # later lookup ambiguous and silently duplicates the routing rules.
     if op_run item edit "$existing" \
-      --vault "$VAULT" \
+      --vault "$vault" \
       "${IDENTITY_EMAIL_FIELD}[text]=$email" \
       "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
-      pass "updated $title in $VAULT"
+      pass "updated $title in $vault"
     else
       fail "could not update the existing identity item"
       return 1
@@ -880,20 +1262,37 @@ cmd_identity_add() {
   elif op_run item create \
     --category "Secure Note" \
     --title "$title" \
-    --vault "$VAULT" \
+    --vault "$vault" \
     "${IDENTITY_EMAIL_FIELD}[text]=$email" \
     "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
-    pass "created $title in $VAULT"
+    pass "created $title in $vault"
   else
     fail "could not create the identity item"
     return 1
   fi
 
-  cmd_sync_identities || return 1
-  # The trust store lists one line per principal, and a new identity adds a
-  # principal. Skipping this would leave commits made under the new email
-  # unverifiable locally until the next unrelated sync.
-  cmd_sync_signers
+  # A foreign-vault write provisions another machine. Do not rewrite this
+  # machine's local routing from its own, different trust boundary.
+  local sync_local=0 target_vault_id configured_vault_id
+  if [[ "$vault" == "$VAULT" ]]; then
+    sync_local=1
+  elif [[ -n "$VAULT" ]]; then
+    target_vault_id="$(op_run vault get "$vault" --format json 2>/dev/null |
+      jq -r '.id // empty')"
+    configured_vault_id="$(resolve_vault_id 2>/dev/null || true)"
+    [[ -n "$target_vault_id" && "$target_vault_id" == "$configured_vault_id" ]] &&
+      sync_local=1
+  fi
+
+  if [[ "$sync_local" -eq 1 ]]; then
+    cmd_sync_identities || return 1
+    # The trust store lists principals, and a new identity adds one. Skipping
+    # this would leave its commits unverifiable until the next unrelated sync.
+    cmd_sync_signers
+  else
+    note "Identity stored for another vault; local routing was left unchanged."
+    note "On machines using $vault, run: dotfiles-keys sync"
+  fi
 }
 
 # The vault is the only place that knows how many machines exist, so the trust
@@ -902,34 +1301,43 @@ cmd_identity_add() {
 cmd_sync_signers() {
   require_command op || return 1
   require_command jq || return 1
+  require_vault || return 1
+  require_safe_machine || return 1
 
-  # Each machine keeps its keys in the vault that matches its own trust
-  # boundary: a personal machine in a vault only it can reach, a work machine in
-  # the vault shared with the service account. Putting personal keys in the
-  # shared vault would let a leaked service account token read them, which is
-  # exactly what per-machine keys exist to prevent.
-  #
-  # The consequence is an asymmetric trust store. A desktop machine can
-  # enumerate every vault it can read, so it trusts every machine. A service
-  # account can only enumerate the vault it was granted, so a work machine
-  # trusts the machines in that vault alone. GitHub still shows every signature
-  # as Verified either way; only local `git verify-commit` is narrower.
-  local list_args=(item list --categories "SSH Key" --format json)
-  if [[ "$BACKEND" == "service-account" ]]; then
-    require_vault || return 1
-    list_args+=(--vault "$VAULT")
+  if ! valid_email "$DEFAULT_EMAIL"; then
+    fail "default email is not a safe SSH signing principal: $DEFAULT_EMAIL"
+    return 1
   fi
 
+  # The configured vault is the trust boundary for both identities and keys.
+  # Mixing keys from every desktop-readable vault with emails from only this
+  # vault would assign foreign keys to the wrong principals.
   local items
-  if ! items="$(op_run "${list_args[@]}" 2>/dev/null)"; then
+  if ! items="$(op_run item list \
+    --categories "SSH Key" \
+    --vault "$VAULT" \
+    --format json 2>/dev/null)"; then
     fail "could not list SSH key items in 1Password"
     return 1
   fi
 
-  # id<TAB>title, so the read below works regardless of which vault it is in.
+  local duplicate_titles
+  duplicate_titles="$(jq -r --arg prefix "$SIGN_ITEM_PREFIX" '
+    [.[] | select(.title | startswith($prefix + " ("))]
+    | group_by(.title)[]
+    | select(length > 1)
+    | .[0].title
+  ' <<<"$items")"
+  if [[ -n "$duplicate_titles" ]]; then
+    fail "duplicate signing-key titles in $VAULT:"
+    printf '%s\n' "$duplicate_titles" | sed 's/^/     /' >&2
+    return 1
+  fi
+
+  # id<TAB>title within the configured vault.
   local rows
   rows="$(jq -r --arg prefix "$SIGN_ITEM_PREFIX" \
-    '.[] | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' <<<"$items" |
+    '.[] | select(.title | startswith($prefix + " (")) | "\(.id)\t\(.title)"' <<<"$items" |
     sort -t"$(printf '\t')" -k2)"
 
   if [[ -z "$rows" ]]; then
@@ -938,32 +1346,91 @@ cmd_sync_signers() {
     return 1
   fi
 
-  local principal_list
-  principal_list="$(principals)"
-  if [[ -z "$principal_list" ]]; then
-    fail "no principals: neither a default email nor any identity is readable"
-    return 1
-  fi
+  # Keep a slug-to-email map for account-specific signing keys. Trusting every
+  # key for every email would let a key registered to one GitHub account verify
+  # locally as another identity.
+  local identity_data="" identity_rows_data identity_id slug email
+  identity_rows_data="$(identity_rows)" || return 1
+  while IFS="$(printf '\t')" read -r identity_id slug; do
+    [[ -n "$identity_id" ]] || continue
+    if ! email="$(identity_field "$identity_id" "$IDENTITY_EMAIL_FIELD")"; then
+      fail "could not read the email for identity '$slug'; trust store was kept"
+      return 1
+    fi
+    if ! valid_slug "$slug" || ! valid_email "$email"; then
+      fail "identity '$slug' is not safe for the signing trust store"
+      return 1
+    fi
+    identity_data+="${identity_data:+$'\n'}$slug"$'\t'"$email"
+  done <<<"$identity_rows_data"
 
   local staged
   staged="$(mktemp "${TMPDIR:-/tmp}/allowed-signers.XXXXXX")" || return 1
 
-  local item_id title key principal count=0
+  local item_id title key principal count=0 mapping_count=0
   while IFS="$(printf '\t')" read -r item_id title; do
     [[ -n "$item_id" ]] || continue
     if [[ "$BACKEND" == "service-account" ]]; then
-      key="$(op_run item get "$item_id" --vault "$VAULT" --fields label="$PUBLIC_FIELD" 2>/dev/null)"
+      if ! key="$(op_run item get "$item_id" --vault "$VAULT" \
+        --fields label="$PUBLIC_FIELD" 2>/dev/null)"; then
+        fail "could not read $title; trust store was kept"
+        rm -f -- "$staged"
+        return 1
+      fi
     else
-      key="$(op_run item get "$item_id" --fields label="$PUBLIC_FIELD" 2>/dev/null)"
+      if ! key="$(op_run item get "$item_id" \
+        --fields label="$PUBLIC_FIELD" 2>/dev/null)"; then
+        fail "could not read $title; trust store was kept"
+        rm -f -- "$staged"
+        return 1
+      fi
     fi
     if [[ -z "$key" ]]; then
-      warn "skipping $title: its public key could not be read"
+      fail "$title has an empty public key; trust store was kept"
+      rm -f -- "$staged"
+      return 1
+    fi
+
+    local item_principals="" matched_slug="" mapped_slug mapped_email machine inner
+    inner="${title#"$SIGN_ITEM_PREFIX ("}"
+    inner="${inner%)}"
+    while IFS="$(printf '\t')" read -r mapped_slug mapped_email; do
+      [[ -n "$mapped_slug" ]] || continue
+      machine="${inner% "$mapped_slug"}"
+      if [[ "$inner" == *" $mapped_slug" ]] && valid_slug "$machine"; then
+        matched_slug="$mapped_slug"
+        item_principals="$mapped_email"
+        break
+      fi
+    done <<<"$identity_data"
+
+    if [[ -z "$matched_slug" ]]; then
+      if ! valid_slug "$inner"; then
+        warn "skipping $title: it is neither a valid base title nor a known identity key"
+        continue
+      fi
+      # A base key signs the default identity and any scoped identity that does
+      # not have its own signing key for this same machine.
+      item_principals="$DEFAULT_EMAIL"
+      machine="$inner"
+      while IFS="$(printf '\t')" read -r mapped_slug mapped_email; do
+        [[ -n "$mapped_slug" ]] || continue
+        if ! item_title_exists_in_json "$items" \
+          "$(account_item_title sign "$machine" "$mapped_slug")"; then
+          item_principals+="${item_principals:+$'\n'}$mapped_email"
+        fi
+      done <<<"$identity_data"
+    fi
+
+    if [[ -z "$item_principals" ]]; then
+      warn "skipping $title: no matching identity email is readable"
       continue
     fi
     while IFS= read -r principal; do
       [[ -n "$principal" ]] || continue
       printf '%s %s\n' "$principal" "$key" >>"$staged"
-    done < <(printf '%s\n' "$principal_list")
+      mapping_count=$((mapping_count + 1))
+    done <<<"$item_principals"
     count=$((count + 1))
   done <<<"$rows"
 
@@ -975,27 +1442,91 @@ cmd_sync_signers() {
 
   # Replace atomically: a half-written trust store would make every signature
   # fail to verify.
+  local sorted
+  sorted="$(mktemp "${TMPDIR:-/tmp}/allowed-signers-sorted.XXXXXX")" || {
+    rm -f -- "$staged"
+    return 1
+  }
+  sort -u "$staged" >"$sorted"
+  rm -f -- "$staged"
   mkdir -p "$(dirname "$ALLOWED_SIGNERS")"
   chmod 700 "$(dirname "$ALLOWED_SIGNERS")"
-  mv -- "$staged" "$ALLOWED_SIGNERS"
+  mv -- "$sorted" "$ALLOWED_SIGNERS"
   chmod 600 "$ALLOWED_SIGNERS"
-  pass "trusted $count machine signing key(s) for $(printf '%s\n' "$principal_list" | wc -l | tr -d ' ') identity(ies)"
+  pass "trusted $count signing key(s) across $mapping_count identity mapping(s)"
 }
 
 cmd_load() {
   require_command op || return 1
+  require_command jq || return 1
   require_command ssh-add || return 1
   require_vault || return 1
+  require_safe_machine || return 1
 
   if ! agent_available; then
     fail "no ssh-agent is reachable; cannot load keys"
     return 1
   fi
 
-  local item exit_code=0 error_log
+  local items identity_rows_data
+  if ! items="$(vault_items_json)"; then
+    fail "could not list items in $VAULT"
+    return 1
+  fi
+  identity_rows_data="$(identity_rows_from_json "$items")" || return 1
+
+  local item_ids=() item_titles=()
+  local item item_id exit_code=0
+  for item in "$AUTH_ITEM" "$SIGN_ITEM"; do
+    if ! item_id="$(item_id_from_json "$items" "$item")"; then
+      exit_code=1
+      continue
+    elif [[ -z "$item_id" ]]; then
+      fail "could not find $item in $VAULT"
+      exit_code=1
+    else
+      item_ids+=("$item_id")
+      item_titles+=("$item")
+    fi
+  done
+
+  # A complete identity-specific pair belongs in the same agent as the default
+  # pair. `sync` already writes the matching public files and host alias; not
+  # loading these private halves made that configuration unusable after reboot.
+  local identity_id slug auth_title sign_title auth_id sign_id
+  while IFS="$(printf '\t')" read -r identity_id slug; do
+    [[ -n "$identity_id" ]] || continue
+    if ! valid_slug "$slug"; then
+      fail "identity slug '$slug' is unsafe"
+      exit_code=1
+      continue
+    fi
+    auth_title="$(account_item_title auth "$MACHINE" "$slug")"
+    sign_title="$(account_item_title sign "$MACHINE" "$slug")"
+    if ! auth_id="$(item_id_from_json "$items" "$auth_title")" ||
+      ! sign_id="$(item_id_from_json "$items" "$sign_title")"; then
+      exit_code=1
+      continue
+    fi
+    if [[ -z "$auth_id" && -z "$sign_id" ]]; then
+      continue
+    fi
+    if [[ -z "$auth_id" || -z "$sign_id" ]]; then
+      fail "identity '$slug' has only one account key; refusing a partial load"
+      exit_code=1
+      continue
+    fi
+    item_ids+=("$auth_id" "$sign_id")
+    item_titles+=("$auth_title" "$sign_title")
+  done <<<"$identity_rows_data"
+
+  local error_log
   error_log="$(mktemp "${TMPDIR:-/tmp}/dotfiles-keys-err.XXXXXX")" || return 1
 
-  for item in "$AUTH_ITEM" "$SIGN_ITEM"; do
+  local index
+  for ((index = 0; index < ${#item_ids[@]}; index++)); do
+    item_id="${item_ids[$index]}"
+    item="${item_titles[$index]}"
     local private_key
     # The key exists only in this variable and the agent. It is never written
     # to a file, so there is nothing left behind to clean up or to leak.
@@ -1003,12 +1534,7 @@ cmd_load() {
     # op's stderr goes to its own file rather than being folded into stdout:
     # merging them would splice a warning or progress line into the middle of
     # the private key and ssh-add would reject a key that is actually fine.
-    local item_id
-    if ! item_id="$(resolve_item_id "$item")" || [[ -z "$item_id" ]]; then
-      fail "could not find $item in $VAULT"
-      exit_code=1
-      continue
-    fi
+    : >"$error_log"
     if ! private_key="$(op_run read "$(reference "$item_id" "$PRIVATE_REFERENCE_SUFFIX")" 2>"$error_log")"; then
       fail "could not read $item from $VAULT"
       sed 's/^/     /' "$error_log" >&2
@@ -1042,8 +1568,14 @@ cmd_load() {
 cmd_unload() {
   require_command ssh-add || return 1
 
-  local key removed=0 failed=0 recorded=0
-  for key in "$(recorded_key "$AUTH_KEY_FILE")" "$(recorded_key "$SIGN_KEY_FILE")"; do
+  local key key_file removed=0 failed=0 recorded=0
+  for key_file in \
+    "$AUTH_KEY_FILE" \
+    "$SIGN_KEY_FILE" \
+    "$SSH_DIR"/id_github_auth_*.pub \
+    "$SSH_DIR"/id_github_sign_*.pub; do
+    [[ -e "$key_file" ]] || continue
+    key="$(recorded_key "$key_file")"
     [[ -n "$key" ]] || continue
     recorded=$((recorded + 1))
     if agent_holds_key "$key"; then
@@ -1064,7 +1596,7 @@ cmd_unload() {
   if (( removed > 0 )); then
     pass "removed $removed key(s) from the agent"
   elif (( recorded == 0 )); then
-    warn "no public keys are recorded, so nothing could be matched; run: dotfiles-keys record"
+    warn "no public keys are recorded, so nothing could be matched; run: dotfiles-keys sync"
   else
     note "no managed keys were loaded"
   fi

@@ -9,8 +9,9 @@ authItemPrefix = "GitHub Machine Auth"
 signItemPrefix = "GitHub Machine Sign"
 tokenItem = "GitHub Machine PAT"
 # One 1Password item per git identity, in the vault matching the machine's trust
-# boundary. That vault IS the scope: a work machine cannot see personal
-# identities because it cannot read the vault holding them.
+# boundary. That vault IS the scope: a machine sees only identities deliberately
+# placed in the vault it can read. A work vault may include a personal-repository
+# identity backed by distinct keys made only for that work machine.
 identityItemPrefix = "Git Identity"
 identityEmailField = "email"
 identityScopeField = "scope"

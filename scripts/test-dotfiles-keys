@@ -1,0 +1,839 @@
+#!/usr/bin/env bash
+
+# Behaviorally exercise the helper without talking to 1Password, GitHub, the
+# Keychain, or a real ssh-agent. The helper is rendered exactly as it is for a
+# machine; only its external commands are replaced with stateful fakes.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null 2>&1 || {
+	echo "chezmoi is required" >&2
+	exit 1
+}
+command -v jq >/dev/null 2>&1 || {
+	echo "jq is required" >&2
+	exit 1
+}
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-keys-test.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+fake_bin="$temp_root/bin"
+mkdir -p "$fake_bin"
+
+fail() {
+	printf 'FAIL: %s\n' "$*" >&2
+	exit 1
+}
+
+assert_eq() {
+	local expected=$1 actual=$2 message=$3
+	if [[ "$actual" != "$expected" ]]; then
+		printf 'FAIL: %s\n  expected: %s\n  actual:   %s\n' \
+			"$message" "$expected" "$actual" >&2
+		exit 1
+	fi
+}
+
+assert_contains() {
+	local file=$1 text=$2 message=$3
+	if ! grep -Fq -- "$text" "$file"; then
+		printf 'FAIL: %s\n  missing: %s\n  file: %s\n' \
+			"$message" "$text" "$file" >&2
+		exit 1
+	fi
+}
+
+item_count() {
+	local title=$1 vault=$2
+	awk -F'|' -v title="$title" -v vault="$vault" \
+		'$3 == title && $4 == vault { count++ } END { print count + 0 }' \
+		"$FAKE_STATE/items"
+}
+
+seed_item() {
+	local id=$1 category=$2 title=$3 vault=$4 public_key=$5
+	local email=${6:-} scope=${7:-}
+	printf '%s|%s|%s|%s|%s|%s|%s\n' \
+		"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope" \
+		>>"$FAKE_STATE/items"
+}
+
+new_case() {
+	local name=$1
+	FAKE_STATE="$temp_root/cases/$name"
+	export FAKE_STATE
+	mkdir -p "$FAKE_STATE"
+	: >"$FAKE_STATE/items"
+	: >"$FAKE_STATE/op-calls"
+	: >"$FAKE_STATE/gh-calls"
+	: >"$FAKE_STATE/gh-adds"
+	: >"$FAKE_STATE/ssh-adds"
+	unset FAKE_GH_FAIL_TYPE
+	unset FAKE_GH_USER
+	unset FAKE_OP_FAIL_FIELD
+}
+
+# ---------------------------------------------------------------------------
+# Fake external commands
+# ---------------------------------------------------------------------------
+
+cat >"$fake_bin/op" <<'FAKE_OP'
+#!/usr/bin/env bash
+set -uo pipefail
+
+log_call() {
+	local separator=""
+	local argument
+	for argument in "$@"; do
+		printf '%s%s' "$separator" "$argument" >>"$FAKE_STATE/op-calls"
+		separator=$'\t'
+	done
+	printf '\n' >>"$FAKE_STATE/op-calls"
+}
+
+vault_id() {
+	case "$1" in
+	"Configured Vault") printf 'configured-vault-id' ;;
+	"Target<>Vault") printf 'target-vault-id' ;;
+	*) printf 'vault-id' ;;
+	esac
+}
+
+canonical_vault() {
+	case "$1" in
+	configured-vault-id) printf 'Configured Vault' ;;
+	target-vault-id) printf 'Target<>Vault' ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+same_vault() {
+	[[ "$(canonical_vault "$1")" == "$(canonical_vault "$2")" ]]
+}
+
+item_json_list() {
+	local requested_vault=$1 requested_category=$2
+	local first=true
+	local id category title vault public_key email scope
+	printf '['
+	while IFS='|' read -r id category title vault public_key email scope; do
+		[[ -n "$id" ]] || continue
+		if [[ -n "$requested_vault" ]] && ! same_vault "$vault" "$requested_vault"; then
+			continue
+		fi
+		if [[ -n "$requested_category" && "$category" != "$requested_category" ]]; then
+			continue
+		fi
+		if [[ "$first" == true ]]; then
+			first=false
+		else
+			printf ','
+		fi
+		printf '{"id":"%s","title":"%s","category":"%s"}' "$id" "$title" "$category"
+	done <"$FAKE_STATE/items"
+	printf ']\n'
+}
+
+find_item() {
+	local wanted=$1 requested_vault=$2
+	local id category title vault public_key email scope
+	while IFS='|' read -r id category title vault public_key email scope; do
+		[[ -n "$id" ]] || continue
+		if [[ "$id" != "$wanted" && "$title" != "$wanted" ]]; then
+			continue
+		fi
+		if [[ -n "$requested_vault" ]] && ! same_vault "$vault" "$requested_vault"; then
+			continue
+		fi
+		printf '%s|%s|%s|%s|%s|%s|%s\n' \
+			"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope"
+		return 0
+	done <"$FAKE_STATE/items"
+	return 1
+}
+
+log_call "$@"
+
+case "${1:-} ${2:-}" in
+"whoami ")
+	printf '{"type":"SERVICE_ACCOUNT"}\n'
+	;;
+"account list")
+	printf '[]\n'
+	;;
+"vault get")
+	vault=${3:-}
+	if [[ " $* " == *" --format json "* ]]; then
+		printf '{"id":"%s","name":"%s"}\n' "$(vault_id "$vault")" "$vault"
+	else
+		printf '%s\n' "$vault"
+	fi
+	;;
+"item list")
+	requested_vault=""
+	requested_category=""
+	shift 2
+	while (($# > 0)); do
+		case "$1" in
+		--vault)
+			requested_vault=${2:-}
+			shift 2
+			;;
+		--categories)
+			requested_category=${2:-}
+			shift 2
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+	item_json_list "$requested_vault" "$requested_category"
+	;;
+"item get")
+	wanted=${3:-}
+	requested_vault=""
+	field=""
+	format=""
+	shift 3
+	while (($# > 0)); do
+		case "$1" in
+		--vault)
+			requested_vault=${2:-}
+			shift 2
+			;;
+		--fields)
+			field=${2#label=}
+			shift 2
+			;;
+		--format)
+			format=${2:-}
+			shift 2
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+	if ! row=$(find_item "$wanted" "$requested_vault"); then
+		printf "item not found: %s\n" "$wanted" >&2
+		exit 1
+	fi
+	IFS='|' read -r id category title vault public_key email scope <<<"$row"
+	if [[ "$format" == json ]]; then
+		printf '{"id":"%s","title":"%s"}\n' "$id" "$title"
+	elif [[ -n "$field" ]]; then
+		if [[ -n "${FAKE_OP_FAIL_FIELD:-}" && "$field" == "$FAKE_OP_FAIL_FIELD" ]]; then
+			printf 'simulated field read failure: %s\n' "$field" >&2
+			exit 1
+		fi
+		case "$field" in
+		"public key") printf '%s\n' "$public_key" ;;
+		email) printf '%s\n' "$email" ;;
+		scope) printf '%s\n' "$scope" ;;
+		*) exit 1 ;;
+		esac
+	else
+		printf '%s\n' "$title"
+	fi
+	;;
+"item create")
+	category=""
+	title=""
+	vault=""
+	email=""
+	scope=""
+	shift 2
+	while (($# > 0)); do
+		case "$1" in
+		--category)
+			category=${2:-}
+			shift 2
+			;;
+		--title)
+			title=${2:-}
+			shift 2
+			;;
+		--vault)
+			vault=${2:-}
+			shift 2
+			;;
+		email\[text\]=*)
+			email=${1#email\[text\]=}
+			shift
+			;;
+		scope\[text\]=*)
+			scope=${1#scope\[text\]=}
+			shift
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+	[[ "$category" == ssh ]] && category="SSH Key"
+	line_count=$(wc -l <"$FAKE_STATE/items" | tr -d ' ')
+	id="created-$((line_count + 1))"
+	public_key=""
+	if [[ "$category" == "SSH Key" ]]; then
+		public_key="ssh-ed25519 TEST-$id $title"
+	fi
+	printf '%s|%s|%s|%s|%s|%s|%s\n' \
+		"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope" \
+		>>"$FAKE_STATE/items"
+	printf '{"id":"%s"}\n' "$id"
+	;;
+"item edit")
+	# No current test updates an existing item. Accepting the command keeps this
+	# fake useful if implementation code performs a harmless idempotent edit.
+	printf '{}\n'
+	;;
+"read "*)
+	reference=${2:-}
+	without_scheme=${reference#op://}
+	after_vault=${without_scheme#*/}
+	id=${after_vault%%/*}
+	if ! find_item "$id" "" >/dev/null; then
+		printf 'item not found: %s\n' "$id" >&2
+		exit 1
+	fi
+	printf 'test-private-input-for-%s\n' "$id"
+	;;
+*)
+	printf 'unsupported fake op call: %s\n' "$*" >&2
+	exit 64
+	;;
+esac
+FAKE_OP
+
+cat >"$fake_bin/gh" <<'FAKE_GH'
+#!/usr/bin/env bash
+set -uo pipefail
+
+separator=""
+for argument in "$@"; do
+	printf '%s%s' "$separator" "$argument" >>"$FAKE_STATE/gh-calls"
+	separator=$'\t'
+done
+printf '\n' >>"$FAKE_STATE/gh-calls"
+
+case "${1:-} ${2:-}" in
+"auth status")
+	printf "Token scopes: 'repo', 'admin:ssh_signing_key'\n" >&2
+	;;
+"auth refresh")
+	;;
+"api user" | "api /user")
+	printf '%s\n' "${FAKE_GH_USER:-test-user}"
+	;;
+"ssh-key add")
+	key_file=${3:-}
+	key_type=""
+	title=""
+	shift 3
+	while (($# > 0)); do
+		case "$1" in
+		--type)
+			key_type=${2:-}
+			shift 2
+			;;
+		--title)
+			title=${2:-}
+			shift 2
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+	public_key=$(cat "$key_file")
+	printf '%s|%s|%s\n' "$key_type" "$title" "$public_key" >>"$FAKE_STATE/gh-adds"
+	if [[ -n "${FAKE_GH_FAIL_TYPE:-}" && "$key_type" == "$FAKE_GH_FAIL_TYPE" ]]; then
+		exit 1
+	fi
+	;;
+"api "*)
+	# Provisioning inspects existing keys before adding them. Model gh's
+	# --jq output as one raw public key per line.
+	endpoint=""
+	for argument in "$@"; do
+		case "$argument" in
+		user/keys | user/ssh_signing_keys)
+			endpoint=$argument
+			;;
+		esac
+	done
+	case "$endpoint" in
+	user/keys)
+		awk -F'|' '$1 == "authentication" { print $3 }' "$FAKE_STATE/gh-adds"
+		;;
+	user/ssh_signing_keys)
+		awk -F'|' '$1 == "signing" { print $3 }' "$FAKE_STATE/gh-adds"
+		;;
+	*)
+		printf '[]\n'
+		;;
+	esac
+	;;
+*)
+	printf 'unsupported fake gh call: %s\n' "$*" >&2
+	exit 64
+	;;
+esac
+FAKE_GH
+
+cat >"$fake_bin/ssh-add" <<'FAKE_SSH_ADD'
+#!/usr/bin/env bash
+set -uo pipefail
+
+case "${1:-}" in
+-l | -L)
+	# Exit 1 means the agent is reachable but currently holds no keys.
+	exit 1
+	;;
+esac
+
+arguments="$*"
+payload=""
+for argument in "$@"; do
+	if [[ "$argument" == - ]]; then
+		payload=$(cat)
+		break
+	fi
+done
+printf '%s|%s\n' "$arguments" "$payload" >>"$FAKE_STATE/ssh-adds"
+FAKE_SSH_ADD
+
+cat >"$fake_bin/security" <<'FAKE_SECURITY'
+#!/usr/bin/env bash
+set -uo pipefail
+case "${1:-}" in
+find-generic-password)
+	if [[ " $* " == *" -w "* ]]; then
+		printf 'test-service-token\n'
+	fi
+	;;
+*)
+	exit 64
+	;;
+esac
+FAKE_SECURITY
+
+cat >"$fake_bin/uname" <<'FAKE_UNAME'
+#!/usr/bin/env bash
+printf 'test-runner\n'
+FAKE_UNAME
+
+chmod +x "$fake_bin/op" "$fake_bin/gh" "$fake_bin/ssh-add" \
+	"$fake_bin/security" "$fake_bin/uname"
+
+# ---------------------------------------------------------------------------
+# Render one desktop-backed and one service-account-backed helper.
+# ---------------------------------------------------------------------------
+
+render_helper() {
+	local profile=$1 machine=$2 vault=$3 output=$4
+	local home_dir="$temp_root/home-$profile"
+	local config_file="$temp_root/config-$profile.toml"
+	mkdir -p "$home_dir"
+	cat >"$config_file" <<EOF
+[data]
+  machineType = "$profile"
+  machineName = "$machine"
+  gitName = "Dotfiles Test"
+  defaultEmail = "default@example.com"
+  opVault = "$vault"
+  opTokenKeychainService = "dotfiles-test-token"
+EOF
+	HOME="$home_dir" \
+		"$chezmoi_bin" execute-template \
+		--config "$config_file" \
+		--destination "$home_dir" \
+		--no-tty \
+		--source "$repo_root" \
+		--file "$repo_root/dot_local/bin/executable_dotfiles-keys.tmpl" >"$output"
+	chmod +x "$output"
+}
+
+personal_helper="$temp_root/dotfiles-keys-personal"
+work_helper="$temp_root/dotfiles-keys-work"
+unsafe_machine_helper="$temp_root/dotfiles-keys-unsafe"
+render_helper personal ci-personal "Configured Vault" "$personal_helper"
+render_helper work ci-work "Target<>Vault" "$work_helper"
+render_helper personal "ci work" "Configured Vault" "$unsafe_machine_helper"
+
+run_helper() {
+	local helper=$1
+	shift
+	PATH="$fake_bin:$PATH" HOME="$temp_root/home-${helper##*-}" "$helper" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_default_provision() {
+	new_case default-provision
+	export FAKE_GH_USER=work-account
+	run_helper "$personal_helper" provision target-machine \
+		--vault "Target<>Vault" --github-user work-account >/dev/null
+
+	assert_eq 1 "$(item_count "GitHub Machine Auth (target-machine)" "Target<>Vault")" \
+		"default provision should create one unsuffixed auth item"
+	assert_eq 1 "$(item_count "GitHub Machine Sign (target-machine)" "Target<>Vault")" \
+		"default provision should create one unsuffixed signing item"
+	assert_eq 0 "$(item_count "GitHub Machine Auth (target-machine personal)" "Target<>Vault")" \
+		"default provision must not create identity-suffixed items"
+	assert_eq 2 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"default provision should publish both public keys"
+	assert_contains "$FAKE_STATE/gh-adds" \
+		"authentication|GitHub Machine Auth (target-machine)" \
+		"default provision should publish the authentication key"
+	assert_contains "$FAKE_STATE/gh-adds" \
+		"signing|GitHub Machine Sign (target-machine)" \
+		"default provision should publish the signing key"
+}
+
+test_identity_provision() {
+	new_case identity-provision
+	export FAKE_GH_USER=personal-account
+	run_helper "$personal_helper" provision target-machine \
+		--identity personal --vault "Target<>Vault" \
+		--github-user personal-account >/dev/null
+
+	assert_eq 1 "$(item_count "GitHub Machine Auth (target-machine personal)" "Target<>Vault")" \
+		"identity provision should create one suffixed auth item"
+	assert_eq 1 "$(item_count "GitHub Machine Sign (target-machine personal)" "Target<>Vault")" \
+		"identity provision should create one suffixed signing item"
+	assert_eq 0 "$(item_count "GitHub Machine Auth (target-machine)" "Target<>Vault")" \
+		"identity provision must not create the default pair"
+}
+
+test_legacy_identity_provision() {
+	new_case legacy-provision
+	export FAKE_GH_USER=personal-account
+	run_helper "$personal_helper" provision target-machine personal "Target<>Vault" >/dev/null
+
+	assert_eq 1 "$(item_count "GitHub Machine Auth (target-machine personal)" "Target<>Vault")" \
+		"legacy provision syntax should still create a suffixed auth item"
+	assert_eq 1 "$(item_count "GitHub Machine Sign (target-machine personal)" "Target<>Vault")" \
+		"legacy provision syntax should still create a suffixed signing item"
+}
+
+test_identity_add_target_vault() {
+	new_case identity-add
+	run_helper "$personal_helper" identity-add personal personal@example.com \
+		'Braden1996/**' --vault "Target<>Vault" >/dev/null
+
+	assert_eq 1 "$(item_count "Git Identity (personal)" "Target<>Vault")" \
+		"identity-add should create the item in the requested vault"
+	assert_contains "$FAKE_STATE/items" \
+		"|Git Identity (personal)|Target<>Vault||personal@example.com|Braden1996/**" \
+		"identity-add should store text email and scope fields"
+}
+
+test_github_user_mismatch_is_read_only() {
+	new_case user-mismatch
+	export FAKE_GH_USER=unexpected-account
+	if run_helper "$personal_helper" provision target-machine \
+		--vault "Target<>Vault" --github-user expected-account >/dev/null 2>&1; then
+		fail "GitHub user mismatch should fail"
+	fi
+
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"GitHub user mismatch must not create vault items"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"GitHub user mismatch must not publish keys"
+}
+
+test_help_and_empty_options_are_read_only() {
+	new_case help-read-only
+	export FAKE_GH_USER=work-account
+
+	run_helper "$personal_helper" provision --help >/dev/null
+	run_helper "$personal_helper" identity-add --help >/dev/null
+	if run_helper "$personal_helper" provision target-machine \
+		--identity '' --vault "Target<>Vault" >/dev/null 2>&1; then
+		fail "an explicitly empty identity must fail"
+	fi
+	if run_helper "$personal_helper" provision target-machine \
+		--vault "Target<>Vault" --github-user '' >/dev/null 2>&1; then
+		fail "an explicitly empty GitHub user must fail"
+	fi
+	if run_helper "$personal_helper" identity-add unsafe '*@example.com' \
+		'Braden1996/**' --vault "Target<>Vault" >/dev/null 2>&1; then
+		fail "an allowed-signers email pattern must not be accepted as an identity"
+	fi
+
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"help and invalid option/principal values must not create vault items"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"help and invalid empty options must not publish keys"
+}
+
+test_unsafe_configured_machine_is_read_only() {
+	new_case unsafe-machine
+	if PATH="$fake_bin:$PATH" HOME="$temp_root/home-personal" \
+		"$unsafe_machine_helper" generate >/dev/null 2>&1; then
+		fail "generate should reject an unsafe configured machine name"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"unsafe configured machine name must not create vault items"
+}
+
+test_work_backend_refuses_writes() {
+	new_case work-refuses-writes
+	export FAKE_GH_USER=work-account
+	if run_helper "$work_helper" provision another-machine \
+		--vault "Target<>Vault" --github-user work-account >/dev/null 2>&1; then
+		fail "service-account provision should fail"
+	fi
+
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"service-account provision must not create vault items"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"service-account provision must not publish keys"
+
+	if run_helper "$work_helper" identity-add personal personal@example.com \
+		'Braden1996/**' --vault "Target<>Vault" >/dev/null 2>&1; then
+		fail "service-account identity-add should fail"
+	fi
+	if run_helper "$work_helper" publish >/dev/null 2>&1; then
+		fail "service-account publish should fail"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"service-account identity-add must not create vault items"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"service-account helper must not publish GitHub keys"
+}
+
+test_end_to_end_cross_vault_workflow() {
+	new_case end-to-end
+
+	export FAKE_GH_USER=work-account
+	run_helper "$personal_helper" provision ci-work \
+		--vault "Target<>Vault" --github-user work-account >/dev/null
+
+	export FAKE_GH_USER=personal-account
+	run_helper "$personal_helper" identity-add personal personal@example.com \
+		'Braden1996/**' --vault "Target<>Vault" >/dev/null
+	run_helper "$personal_helper" provision ci-work \
+		--identity personal --vault "Target<>Vault" \
+		--github-user personal-account >/dev/null
+
+	# A rerun must reuse both vault items and already-published GitHub keys.
+	run_helper "$personal_helper" provision ci-work \
+		--identity personal --vault "Target<>Vault" \
+		--github-user personal-account >/dev/null
+	assert_eq 1 "$(item_count "GitHub Machine Auth (ci-work personal)" "Target<>Vault")" \
+		"rerunning identity provision must not duplicate the auth item"
+	assert_eq 1 "$(item_count "GitHub Machine Sign (ci-work personal)" "Target<>Vault")" \
+		"rerunning identity provision must not duplicate the signing item"
+	assert_eq 4 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"rerunning provision must not republish existing GitHub keys"
+
+	run_helper "$work_helper" sync >/dev/null
+	: >"$FAKE_STATE/ssh-adds"
+	run_helper "$work_helper" load >/dev/null
+	assert_eq 4 "$(wc -l <"$FAKE_STATE/ssh-adds" | tr -d ' ')" \
+		"the complete trusted-machine workflow should load all four work keys"
+	assert_contains "$temp_root/home-work/.ssh/config.d/10-personal.conf" \
+		"Host github-personal" \
+		"the complete workflow should create the personal host alias"
+}
+
+test_loads_default_and_identity_pairs() {
+	new_case load-four
+	local work_home status_output unload_output
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	seed_item identity-personal "Secure Note" "Git Identity (personal)" \
+		"Target<>Vault" "" "personal@example.com" "Braden1996/**"
+	seed_item personal-auth "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-auth personal-auth"
+	seed_item personal-sign "SSH Key" "GitHub Machine Sign (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-sign personal-sign"
+
+	run_helper "$work_helper" sync >/dev/null
+	work_home="$temp_root/home-work"
+	assert_contains "$work_home/.ssh/config.d/10-personal.conf" \
+		"Host github-personal" \
+		"sync should create the personal GitHub host alias"
+	assert_contains "$work_home/.config/git/identities/personal.gitconfig" \
+		"signingkey = ~/.ssh/id_github_sign_personal.pub" \
+		"the personal identity should select its own signing key"
+	assert_contains "$work_home/.ssh/allowed_signers" \
+		"default@example.com ssh-ed25519 TEST-base-sign base-sign" \
+		"the default identity should trust the base signing key"
+	assert_contains "$work_home/.ssh/allowed_signers" \
+		"personal@example.com ssh-ed25519 TEST-personal-sign personal-sign" \
+		"the personal identity should trust its account signing key"
+	if grep -Fq "default@example.com ssh-ed25519 TEST-personal-sign" \
+		"$work_home/.ssh/allowed_signers"; then
+		fail "the personal signing key must not verify as the default identity"
+	fi
+	if grep -Fq "personal@example.com ssh-ed25519 TEST-base-sign" \
+		"$work_home/.ssh/allowed_signers"; then
+		fail "the base signing key must not verify as the personal identity"
+	fi
+
+	: >"$FAKE_STATE/ssh-adds"
+	run_helper "$work_helper" load >/dev/null
+
+	assert_eq 4 "$(wc -l <"$FAKE_STATE/ssh-adds" | tr -d ' ')" \
+		"work load should add the default and identity keypairs"
+	for id in base-auth base-sign personal-auth personal-sign; do
+		assert_contains "$FAKE_STATE/ssh-adds" "test-private-input-for-$id" \
+			"work load should stream $id into the agent"
+	done
+	if awk -F'|' '$1 != "-t 9h -" { exit 1 }' "$FAKE_STATE/ssh-adds"; then
+		:
+	else
+		fail "every work key should be loaded with the 9h lifetime"
+	fi
+
+	status_output="$FAKE_STATE/status-output"
+	run_helper "$work_helper" status >"$status_output"
+	assert_contains "$status_output" "'personal' authentication key" \
+		"status should report the identity-specific authentication key"
+	assert_contains "$status_output" "'personal' signing key" \
+		"status should report the identity-specific signing key"
+
+	# Leave only account-specific public files. `unload` should still recognize
+	# managed keys even when the default pair is unavailable.
+	rm -f -- "$work_home/.ssh/id_github_auth.pub" "$work_home/.ssh/id_github_sign.pub"
+	unload_output="$FAKE_STATE/unload-output"
+	run_helper "$work_helper" unload >"$unload_output"
+	assert_contains "$unload_output" "no managed keys were loaded" \
+		"unload should enumerate identity-specific public key files"
+}
+
+test_partial_pair_preserves_routing() {
+	new_case partial-pair
+	local alias_file
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	seed_item identity-personal "Secure Note" "Git Identity (personal)" \
+		"Target<>Vault" "" "personal@example.com" "Braden1996/**"
+	seed_item personal-auth "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-auth personal-auth"
+	seed_item personal-sign "SSH Key" "GitHub Machine Sign (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-sign personal-sign"
+
+	run_helper "$work_helper" sync >/dev/null
+	alias_file="$temp_root/home-work/.ssh/config.d/10-personal.conf"
+	[[ -f "$alias_file" ]] || fail "complete account pair should create routing"
+
+	awk -F'|' '$1 != "personal-sign"' "$FAKE_STATE/items" >"$FAKE_STATE/items.next"
+	mv -- "$FAKE_STATE/items.next" "$FAKE_STATE/items"
+	if run_helper "$work_helper" sync >/dev/null 2>&1; then
+		fail "sync should reject an incomplete account keypair"
+	fi
+	[[ -f "$alias_file" ]] ||
+		fail "failed sync must preserve the last complete account routing"
+}
+
+test_duplicate_and_field_failure_preserve_routing() {
+	new_case invalid-snapshot
+	local alias_file
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	seed_item identity-personal "Secure Note" "Git Identity (personal)" \
+		"Target<>Vault" "" "personal@example.com" "Braden1996/**"
+	seed_item personal-auth "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-auth personal-auth"
+	seed_item personal-sign "SSH Key" "GitHub Machine Sign (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-sign personal-sign"
+	run_helper "$work_helper" sync >/dev/null
+	alias_file="$temp_root/home-work/.ssh/config.d/10-personal.conf"
+
+	seed_item duplicate-auth "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-duplicate-auth duplicate-auth"
+	if run_helper "$work_helper" sync >/dev/null 2>&1; then
+		fail "sync should reject duplicate key titles"
+	fi
+	[[ -f "$alias_file" ]] ||
+		fail "duplicate key rejection must preserve the last complete routing"
+	awk -F'|' '$1 != "duplicate-auth"' "$FAKE_STATE/items" >"$FAKE_STATE/items.next"
+	mv -- "$FAKE_STATE/items.next" "$FAKE_STATE/items"
+
+	export FAKE_OP_FAIL_FIELD=scope
+	if run_helper "$work_helper" sync >/dev/null 2>&1; then
+		fail "sync should fail when an identity field cannot be read"
+	fi
+	[[ -f "$alias_file" ]] ||
+		fail "identity read failure must preserve the last complete routing"
+}
+
+test_load_rejects_duplicate_account_pair() {
+	new_case duplicate-load
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	seed_item identity-personal "Secure Note" "Git Identity (personal)" \
+		"Target<>Vault" "" "personal@example.com" "Braden1996/**"
+	seed_item personal-auth-a "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-auth-a personal-auth-a"
+	seed_item personal-auth-b "SSH Key" "GitHub Machine Auth (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-auth-b personal-auth-b"
+	seed_item personal-sign-a "SSH Key" "GitHub Machine Sign (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-sign-a personal-sign-a"
+	seed_item personal-sign-b "SSH Key" "GitHub Machine Sign (ci-work personal)" \
+		"Target<>Vault" "ssh-ed25519 TEST-personal-sign-b personal-sign-b"
+
+	if run_helper "$work_helper" load >/dev/null 2>&1; then
+		fail "load should fail when account key titles are duplicated"
+	fi
+	assert_eq 2 "$(wc -l <"$FAKE_STATE/ssh-adds" | tr -d ' ')" \
+		"duplicate account keys must not be selected arbitrarily"
+}
+
+test_publish_failure_is_nonzero() {
+	new_case publish-failure
+	export FAKE_GH_USER=work-account
+	export FAKE_GH_FAIL_TYPE=signing
+	if run_helper "$personal_helper" provision target-machine \
+		--vault "Target<>Vault" --github-user work-account >/dev/null 2>&1; then
+		fail "a signing-key publish failure must make provision fail"
+	fi
+	assert_eq 1 "$(wc -l <"$FAKE_STATE/gh-adds" | tr -d ' ')" \
+		"provision should stop after the signing key fails"
+	assert_contains "$FAKE_STATE/gh-adds" \
+		"signing|GitHub Machine Sign (target-machine)" \
+		"provision should publish signing first to avoid an auth-only setup"
+}
+
+run_test() {
+	local name=$1
+	shift
+	printf 'test: %s ... ' "$name"
+	"$@"
+	printf 'ok\n'
+}
+
+run_test "default provision" test_default_provision
+run_test "identity provision" test_identity_provision
+run_test "legacy identity provision syntax" test_legacy_identity_provision
+run_test "identity-add target vault" test_identity_add_target_vault
+run_test "GitHub user mismatch is read-only" test_github_user_mismatch_is_read_only
+run_test "help and empty options are read-only" test_help_and_empty_options_are_read_only
+run_test "unsafe configured machine is read-only" test_unsafe_configured_machine_is_read_only
+run_test "service-account writes are refused" test_work_backend_refuses_writes
+run_test "end-to-end cross-vault workflow" test_end_to_end_cross_vault_workflow
+run_test "load default and identity keypairs" test_loads_default_and_identity_pairs
+run_test "partial pair preserves routing" test_partial_pair_preserves_routing
+run_test "invalid snapshots preserve routing" test_duplicate_and_field_failure_preserve_routing
+run_test "load rejects duplicate account pair" test_load_rejects_duplicate_account_pair
+run_test "publish failure is nonzero" test_publish_failure_is_nonzero
+
+printf 'all dotfiles-keys tests passed\n'
