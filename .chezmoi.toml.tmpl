@@ -23,11 +23,11 @@ on a personal machine. defaultEmail below is the default when none matches.
 */}}
 
 {{/*
-Personal machines run the 1Password desktop app, whose SSH agent holds the
-private keys and never exposes them. Work machines have CLI-only access through
-a service account, so keys are read on demand and loaded into the OS ssh-agent.
-Both backends present Git the same interface: an agent socket, and no private
-key on disk.
+Personal machines use the 1Password desktop app to authenticate the CLI. Work
+machines have CLI-only access through a read-only service account. On both
+profiles, `dotfiles-keys load` streams the private keys into the OS ssh-agent;
+the private halves are never written to disk. Work copies expire after a
+bounded lifetime, while personal copies last until logout.
 
 The backend is deliberately NOT stored in [data]. Anything written here only
 appears after `chezmoi init`, so a machine that pulls a change and runs a plain
@@ -53,11 +53,12 @@ resolves from the FQDN and can return something generic and network-dependent
 {{- $machineName := promptStringOnce . "machineName" "Short name for this machine, used to scope its GitHub keys" (or (get . "machineName") (output "hostname" "-s" | trim)) -}}
 
 {{/*
-The vault this machine keeps its own keys in, chosen to match its trust
-boundary. A personal machine uses a vault only it can reach. A work machine
-must use the vault shared with the service account, because that is the only
-thing it can read -- and putting personal keys there too would let a leaked
-service account token read them.
+The vault this machine keeps its keys and identities in is its trust boundary.
+A personal machine uses a vault only it can reach. A work machine uses the
+vault shared with its service account. That work vault may deliberately contain
+dedicated, per-work-machine keys for a personal GitHub account; it must never
+contain the personal machine's own reusable keys, because the service account
+can read every private key placed there.
 
 Either a name or an ID works: dotfiles-keys resolves the name via `op vault get`
 before ever building a secret reference, so characters like `<>` that a
