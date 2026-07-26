@@ -69,9 +69,14 @@ reference would reject (verified against op 2.35.0) cause no trouble here.
 Work machines read their service account token from the login keychain. The
 service name is prompted rather than fixed, so a token already stored under
 some other name does not have to be recreated just to match this repository.
-Ignored on personal machines, which authenticate through the desktop app.
+Gated on machineType, not just documented as such: a personal machine
+authenticates through the desktop app and has no use for this value, so it
+should never be asked.
 */}}
-{{- $opTokenKeychainService := promptStringOnce . "opTokenKeychainService" "Keychain service name holding the 1Password service account token (work machines)" (or (get . "opTokenKeychainService") "dotfiles-op-service-account") -}}
+{{- $opTokenKeychainService := "" -}}
+{{- if eq $machineType "work" -}}
+{{-   $opTokenKeychainService = promptStringOnce . "opTokenKeychainService" "Keychain service name holding the 1Password service account token" (or (get . "opTokenKeychainService") "dotfiles-op-service-account") -}}
+{{- end -}}
 
 [data]
   machineType = {{ $machineType | quote }}

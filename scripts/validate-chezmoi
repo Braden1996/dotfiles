@@ -90,7 +90,7 @@ while IFS= read -r -d '' template; do
 			--promptString "Git author name=Dotfiles CI" \
 			--promptString "Default email address (used when no identity scope matches)=personal@example.com" \
 			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
-			--promptString "Keychain service name holding the 1Password service account token (work machines)=dotfiles-ci-token" \
+			--promptString "Keychain service name holding the 1Password service account token=dotfiles-ci-token" \
 			--file "$template" >"$rendered"
 	else
 		cm execute-template --file "$template" >"$rendered"
