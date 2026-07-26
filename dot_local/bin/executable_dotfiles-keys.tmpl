@@ -46,6 +46,7 @@ readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
 readonly TOKEN_FIELD={{ .credentials.tokenField | quote }}
 readonly TOKEN_USER_FIELD={{ .credentials.tokenUserField | quote }}
 readonly KEY_LIFETIME={{ .credentials.agentKeyLifetime | quote }}
+readonly KEYCHAIN_ACCOUNT={{ .chezmoi.username | quote }}
 readonly KEYCHAIN_SERVICE={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 readonly TOKEN_FILE={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
 readonly SSH_DIR={{ joinPath .chezmoi.homeDir ".ssh" | quote }}
@@ -115,6 +116,22 @@ file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null
 }
 
+file_owner_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null
+}
+
+token_file_is_safe() {
+  [[ -f "$TOKEN_FILE" && ! -L "$TOKEN_FILE" && -r "$TOKEN_FILE" ]] || return 1
+  if [[ "$(file_mode "$TOKEN_FILE")" != 600 ]]; then
+    fail "refusing service-account token file without mode 0600: $TOKEN_FILE"
+    return 1
+  fi
+  if [[ "$(file_owner_uid "$TOKEN_FILE")" != "$(id -u)" ]]; then
+    fail "refusing service-account token file not owned by the current user"
+    return 1
+  fi
+}
+
 require_vault() {
   if [[ -z "$VAULT" ]]; then
     fail "no 1Password vault is configured; run: chezmoi init --prompt"
@@ -123,9 +140,9 @@ require_vault() {
 }
 
 # Resolve the service account token, preferring the strongest store available.
-# A 0600 file is readable by anything running as this user; a Keychain item is
-# encrypted at rest and gated by the item's own access control. The file is
-# kept as a fallback so non-macOS hosts still work.
+# Keychain gives stronger at-rest protection than a 0600 file, but it is not
+# same-user process isolation while the login keychain is unlocked. The file is
+# kept as a validated fallback so non-macOS hosts still work.
 service_account_token() {
   if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
     printf '%s' "$OP_SERVICE_ACCOUNT_TOKEN"
@@ -133,12 +150,15 @@ service_account_token() {
   fi
   if command -v security >/dev/null 2>&1; then
     local from_keychain
-    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" 2>/dev/null)"; then
+    if from_keychain="$(
+      security find-generic-password \
+        -w -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" 2>/dev/null
+    )"; then
       printf '%s' "$from_keychain"
       return 0
     fi
   fi
-  if [[ -r "$TOKEN_FILE" ]]; then
+  if token_file_is_safe; then
     tr -d '[:space:]' <"$TOKEN_FILE"
     return 0
   fi
@@ -150,9 +170,10 @@ token_source() {
   if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
     printf 'environment'
   elif command -v security >/dev/null 2>&1 &&
-    security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
+    security find-generic-password \
+      -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
     printf 'keychain'
-  elif [[ -r "$TOKEN_FILE" ]]; then
+  elif token_file_is_safe; then
     printf 'file'
   else
     printf 'none'
@@ -161,6 +182,13 @@ token_source() {
 
 # Supply the service account token to a single op invocation rather than
 # exporting it into the environment of every process in the session.
+op_desktop() {
+  (
+    unset OP_SERVICE_ACCOUNT_TOKEN OP_CONNECT_HOST OP_CONNECT_TOKEN
+    op "$@"
+  )
+}
+
 op_run() {
   if [[ "$BACKEND" == "service-account" ]]; then
     local token
@@ -176,9 +204,12 @@ op_run() {
       fail "the stored service account token is empty"
       return 1
     fi
-    OP_SERVICE_ACCOUNT_TOKEN="$token" op "$@"
+    (
+      unset OP_CONNECT_HOST OP_CONNECT_TOKEN
+      OP_SERVICE_ACCOUNT_TOKEN="$token" op "$@"
+    )
   else
-    op "$@"
+    op_desktop "$@"
   fi
 }
 
@@ -455,10 +486,10 @@ setup_preflight() {
   # An unlocked app with a known account still needs a signed-in session.
   # Trigger it here rather than making the user re-run setup after doing it by
   # hand -- op signin raises the app's own prompt, so nothing is typed here.
-  if [[ "$BACKEND" == "desktop" ]] && ! op whoami >/dev/null 2>&1; then
-    if [[ -n "$(op account list 2>/dev/null)" ]] && [[ -t 0 ]]; then
+  if [[ "$BACKEND" == "desktop" ]] && ! op_desktop whoami >/dev/null 2>&1; then
+    if [[ -n "$(op_desktop account list 2>/dev/null)" ]] && [[ -t 0 ]]; then
       note "Not signed in. Approve the 1Password prompt..."
-      op signin >/dev/null 2>&1 || true
+      op_desktop signin >/dev/null 2>&1 || true
     fi
   fi
 
@@ -472,7 +503,8 @@ setup_preflight() {
       # Distinguish "no account" from "account known but not signed in": the
       # fixes are completely different, and conflating them sends you to a
       # setting that is already switched on.
-      if op account list >/dev/null 2>&1 && [[ -n "$(op account list 2>/dev/null)" ]]; then
+      if op_desktop account list >/dev/null 2>&1 &&
+        [[ -n "$(op_desktop account list 2>/dev/null)" ]]; then
         note "The app integration is working -- op can see your account -- but"
         note "this session is not signed in. Run: op signin"
         note "If that fails, quit and reopen 1Password: the app validates the"
@@ -566,8 +598,9 @@ Then check it worked:
   ssh -T git@github.com
 
 Nothing else needs adding to the vault by hand. The only optional extra is a
-GitHub token for `gh` on machines that cannot log in interactively -- see
-"The GitHub token" in the README; GitHub does not allow creating one via API.
+GitHub token for `gh` on machines that cannot log in interactively. See
+docs/credentials.md in the Chezmoi source; GitHub does not allow creating one
+via API.
 DONE
 }
 
@@ -1626,7 +1659,7 @@ cmd_store_token() {
   # the only form that keeps the token out of the process list.
   if security add-generic-password \
     -U \
-    -a "$USER" \
+    -a "$KEYCHAIN_ACCOUNT" \
     -s "$KEYCHAIN_SERVICE" \
     -D "1Password service account token" \
     -j "Used by dotfiles-keys on this work machine" \

@@ -1,6 +1,5 @@
-# Static, non-secret coordinates for the machine GitHub credentials. The vault
-# name itself is machine-local data because only service-account machines have
-# one; these item and field names are the same everywhere.
+# Static, non-secret coordinates for credentials. The vault name itself is
+# machine-local; these item and field names are the same everywhere.
 [credentials]
 # Keys are per-machine: the real item titles are these prefixes followed by
 # " (<hostname>)". That is what lets one machine be revoked on GitHub without
@@ -39,14 +38,25 @@ tokenUserField = "username"
 # expiry: revocation was never their threat model, and an unattended agent that
 # finds a dead key at 3am cannot sign.
 agentKeyLifetime = "9h"
-# Where a work machine's service account token lives. The macOS Keychain is
-# preferred: a 0600 file is readable by anything running as the user, whereas a
-# Keychain item is encrypted at rest and gated by the item's access control.
+# Where a work machine's service account token lives. The macOS Keychain gives
+# stronger at-rest protection than a 0600 file, but it is not same-user process
+# isolation while the login keychain is unlocked.
 # The file remains a fallback for non-macOS hosts. The keychain SERVICE name is
 # machine-local (see opTokenKeychainService in .chezmoi.toml.tmpl) because an
 # existing item may already be named something else.
 # Machine-local, never managed by chezmoi, never committed. Relative to $HOME.
 serviceAccountTokenFile = ".config/op/service-account-token"
+
+[runtimeSecrets."flow-icons"]
+item = "Flow Icons Premium"
+field = "credential"
+profiles = ["personal", "work"]
+optional = true
+description = "Flow Icons premium licence"
+
+[flowIcons]
+revision = "0b7d8e039dd981a35475eb7b6d2093f412184627"
+archiveSha256 = "f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7"
 
 [privacyEnv]
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"

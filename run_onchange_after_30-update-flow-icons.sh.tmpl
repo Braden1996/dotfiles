@@ -1,0 +1,8 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+set -euo pipefail
+
+# Reviewed upstream revision: {{ .flowIcons.revision }}
+# Helper source hash: {{ include "dot_local/bin/executable_dotfiles-flow-icons.tmpl" | sha256sum }}
+{{ printf "%s/.local/bin/dotfiles-flow-icons" .chezmoi.homeDir | quote }}
+{{- end }}

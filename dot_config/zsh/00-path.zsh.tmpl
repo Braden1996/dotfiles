@@ -16,8 +16,10 @@ for __braden_path_dir in \
   "$HOME/.bun/bin" \
   "$HOME/.cargo/bin" \
   "$HOME/.antigravity/antigravity/bin" \
+{{- if eq .machineType "personal" }}
   "$HOME/.grok/bin" \
   "$HOME/.kimi-code/bin" \
+{{- end }}
   "$__braden_homebrew_prefix/bin" \
   "$__braden_homebrew_prefix/sbin" \
   /usr/local/bin

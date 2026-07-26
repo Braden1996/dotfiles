@@ -1,3 +1,4 @@
-# Generated from the static privacyEnv map in .chezmoidata.toml.
-{{ range $name, $value := .privacyEnv }}set -gx {{ $name }} {{ $value | quote }}
+# Generated from the privacyEnv map in .chezmoidata.toml. Grok is personal-only.
+{{ range $name, $value := .privacyEnv }}{{ if or (ne $name "GROK_TELEMETRY_ENABLED") (eq $.machineType "personal") }}set -gx {{ $name }} {{ $value | quote }}
+{{ end }}
 {{ end }}

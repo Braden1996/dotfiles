@@ -89,7 +89,7 @@ while IFS= read -r -d '' template; do
 			--promptString "Short name for this machine, used to scope its GitHub keys=$ci_machine_name" \
 			--promptString "Git author name=Dotfiles CI" \
 			--promptString "Default email address (used when no identity scope matches)=personal@example.com" \
-			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
+			--promptString "1Password vault for this machine's dotfile credentials (name or ID)=$ci_vault" \
 			--promptString "Keychain service name holding the 1Password service account token=dotfiles-ci-token" \
 			--file "$template" >"$rendered"
 	else
@@ -256,6 +256,13 @@ grep -Fq "GitHub Machine Auth ($ci_machine_name)" "$keys_command"
 grep -Fq "GitHub Machine Sign ($ci_machine_name)" "$keys_command"
 grep -Fq 'sync-signers' "$keys_command"
 
+secrets_command="$home_dir/.local/bin/dotfiles-secrets"
+[[ -x "$secrets_command" ]]
+grep -Fq 'Flow Icons Premium' "$secrets_command"
+"$secrets_command" list >"$temp_root/runtime-secrets"
+grep -Eq '^flow-icons[[:space:]]+personal,work[[:space:]]' \
+	"$temp_root/runtime-secrets"
+
 # Prove the generated config actually parses, rather than only that it contains
 # the right substrings. ssh -G fails on an unknown keyword or bad syntax.
 if command -v ssh >/dev/null 2>&1; then
@@ -355,6 +362,7 @@ if command -v brew >/dev/null 2>&1; then
 fi
 
 grep -Eq '^cask "1password-cli"$' "$brewfile"
+grep -Eq '^cask "font-atkinson-hyperlegible"$' "$brewfile"
 if [[ "$profile" == personal ]]; then
 	grep -Eq '^cask "1password"$' "$brewfile"
 elif grep -Eq '^cask "1password"$' "$brewfile"; then
@@ -367,11 +375,13 @@ privacy_expected=(
 	"DO_NOT_TRACK=1"
 	"GH_TELEMETRY=0"
 	"GRAPHITE_DISABLE_TELEMETRY=1"
-	"GROK_TELEMETRY_ENABLED=0"
 	"HOMEBREW_NO_ANALYTICS=1"
 	"SST_TELEMETRY_DISABLED=1"
 	"YARN_ENABLE_TELEMETRY=0"
 )
+if [[ "$profile" == personal ]]; then
+	privacy_expected+=("GROK_TELEMETRY_ENABLED=0")
+fi
 
 assert_privacy_env() {
 	local shell_name=$1
@@ -390,6 +400,10 @@ assert_privacy_env() {
 # shellcheck disable=SC2016
 bash_privacy=$(env -i HOME="$home_dir" PATH="$PATH" bash --noprofile --norc -c '. "$HOME/.profile"; env')
 assert_privacy_env Bash "$bash_privacy"
+if [[ "$profile" == work ]] && grep -Fq 'GROK_TELEMETRY_ENABLED=' <<<"$bash_privacy"; then
+	echo "work profile must not export Grok environment settings" >&2
+	exit 1
+fi
 
 if command -v zsh >/dev/null 2>&1; then
 	# shellcheck disable=SC2016
@@ -402,6 +416,22 @@ if command -v fish >/dev/null 2>&1; then
 	fish_privacy=$(env -i HOME="$home_dir" PATH="$PATH" fish -c 'source "$HOME/.config/fish/conf.d/05-privacy.fish"; env')
 	assert_privacy_env Fish "$fish_privacy"
 fi
+
+profile_path_files=(
+	"$home_dir/.profile"
+	"$home_dir/.config/zsh/00-path.zsh"
+	"$home_dir/.config/fish/conf.d/00-env.fish"
+)
+for path_file in "${profile_path_files[@]}"; do
+	[[ -f "$path_file" ]] || continue
+	if [[ "$profile" == personal ]]; then
+		grep -Fq "\$HOME/.grok/bin" "$path_file"
+		grep -Fq "\$HOME/.kimi-code/bin" "$path_file"
+	elif grep -Eq '\.grok/bin|\.kimi-code/bin' "$path_file"; then
+		echo "work profile exposes a personal AI tool on PATH: $path_file" >&2
+		exit 1
+	fi
+done
 
 for forbidden_env in HOMEBREW_NO_AUTO_UPDATE CHECKPOINT_DISABLE GH_NO_UPDATE_NOTIFIER npm_config_offline YARN_ENABLE_NETWORK; do
 	if grep -Eq "^${forbidden_env}=" <<<"$bash_privacy"; then
@@ -436,9 +466,11 @@ printf '{\n  // Existing local-only extension state.\n  "%s": "%s",\n}\n' \
 cm execute-template --with-stdin --file "$cursor_source" \
 	<"$cursor_existing" >"$cursor_preserved"
 if ! grep -Fq -- "\"$license_key\": \"$license_value\"" "$cursor_preserved"; then
-	echo "Cursor's existing local Flow Icons license was not preserved" >&2
+	echo "Cursor's existing local Flow Icons licence was not preserved" >&2
 	exit 1
 fi
+grep -Fq '"settingsSync.ignoredSettings": ["flow-icons.licenseKey"]' \
+	"$cursor_settings"
 if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
 	echo "Cursor's license key must not be invented on a new installation" >&2
 	exit 1
@@ -469,11 +501,30 @@ grep -Fq 'gh config set telemetry disabled' "$repo_root/run_onchange_after_05-in
 grep -Fq 'sst telemetry disable' "$repo_root/run_onchange_after_05-install-packages.sh.tmpl"
 
 grok_config="$home_dir/.grok/config.toml"
-[[ -f "$grok_config" ]]
-grep -Eq '^[[:space:]]*telemetry[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
-grep -Eq '^[[:space:]]*trace_upload[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
-grep -Eq '^[[:space:]]*mixpanel_enabled[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
-grep -Eq '^[[:space:]]*disable_codebase_upload[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$grok_config"
+if [[ "$profile" == personal ]]; then
+	[[ -f "$grok_config" ]]
+	grep -Eq '^[[:space:]]*telemetry[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+	grep -Eq '^[[:space:]]*trace_upload[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+	grep -Eq '^[[:space:]]*mixpanel_enabled[[:space:]]*=[[:space:]]*false[[:space:]]*$' "$grok_config"
+	grep -Eq '^[[:space:]]*disable_codebase_upload[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$grok_config"
+elif [[ -e "$grok_config" ]]; then
+	echo "work profile retained a Grok config" >&2
+	exit 1
+fi
+
+zed_settings="$home_dir/.config/zed/settings.json"
+flow_command="$home_dir/.local/bin/dotfiles-flow-icons"
+external_render="$temp_root/rendered/externals-$profile.toml"
+cm execute-template --file "$repo_root/.chezmoiexternal.toml" >"$external_render"
+[[ -x "$flow_command" ]]
+grep -Fq '"Flow Dim"' "$zed_settings"
+grep -Fq 'type = "archive"' "$external_render"
+grep -Fq 'f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7' \
+	"$external_render"
+if grep -Fq 'type = "git-repo"' "$external_render"; then
+	echo "Flow Icons external must not use a mutable git checkout" >&2
+	exit 1
+fi
 
 for bash_file in "$home_dir/.bash_profile" "$home_dir/.bashrc" "$home_dir/.profile"; do
 	[[ ! -f "$bash_file" ]] || bash -n "$bash_file"
