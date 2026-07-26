@@ -38,8 +38,13 @@ done
 credential_backend={{ ternary "service-account" "desktop" (eq (get . "machineType" | default "personal") "work") | quote }}
 credential_vault={{ get . "opVault" | default "" | quote }}
 # Public keys live on disk, written from the vault by `dotfiles-keys sync`.
-recorded_auth_key="$( [[ -r "$HOME/.ssh/id_github_auth.pub" ]] && cat "$HOME/.ssh/id_github_auth.pub" || true )"
-recorded_sign_key="$( [[ -r "$HOME/.ssh/id_github_sign.pub" ]] && cat "$HOME/.ssh/id_github_sign.pub" || true )"
+read_if_present() {
+  if [[ -r "$1" ]]; then
+    cat "$1"
+  fi
+}
+recorded_auth_key="$(read_if_present "$HOME/.ssh/id_github_auth.pub")"
+recorded_sign_key="$(read_if_present "$HOME/.ssh/id_github_sign.pub")"
 personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
 service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
 service_account_keychain={{ .credentials.serviceAccountKeychainService | quote }}
@@ -120,10 +125,8 @@ check_agent_key() {
     warn "$label public key is missing from ~/.ssh; run: dotfiles-keys sync"
   elif agent_holds_key "$key"; then
     pass "$label key is held by the ssh-agent"
-  elif [[ "$credential_backend" == "service-account" ]]; then
-    warn "$label key is not loaded; run: dotfiles-keys load"
   else
-    warn "$label key is not offered by the agent; check the 1Password SSH agent setting"
+    warn "$label key is not loaded; run: dotfiles-keys load"
   fi
 }
 
@@ -229,8 +232,8 @@ if [[ "$credential_backend" == "service-account" ]]; then
   fi
 fi
 
-# The 1Password agent can prompt for biometric consent, so only sign actively
-# when stdin/stdout are attached to a user terminal (CI, pipes, editor tasks).
+# Signing needs no consent now that keys sit in the OS agent, but keep the
+# active test off non-interactive runs (CI, pipes, editor tasks) regardless.
 if [[ -t 0 && -t 1 ]]; then
   if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
     test_signed_commit "$recorded_sign_key" "$personal_email"

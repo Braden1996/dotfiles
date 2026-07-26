@@ -264,8 +264,16 @@ cmd_status() {
   fi
 
   printf '\nTooling\n'
-  require_command op && pass "op is available" || exit_code=1
-  require_command ssh-add && pass "ssh-add is available" || exit_code=1
+  if require_command op; then
+    pass "op is available"
+  else
+    exit_code=1
+  fi
+  if require_command ssh-add; then
+    pass "ssh-add is available"
+  else
+    exit_code=1
+  fi
   if command -v gh >/dev/null 2>&1; then
     pass "gh is available"
   else

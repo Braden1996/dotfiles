@@ -64,16 +64,20 @@ jobs:
           version: ${{ env.MISE_VERSION }}
           install: false
 
-      - name: Install selected chezmoi version
+      - name: Install selected chezmoi version and the pinned linters
         env:
           CHEZMOI_VERSION: ${{ matrix.chezmoi }}
-        run: mise install "chezmoi@$CHEZMOI_VERSION"
+        # validate-chezmoi shellchecks every rendered script. Without the pinned
+        # shellcheck it would use whatever version the runner happens to ship,
+        # so a local `mise run check` could pass while CI failed on rules the
+        # two versions disagree about.
+        run: mise install "chezmoi@$CHEZMOI_VERSION" shellcheck
 
       - name: Render and apply twice in a disposable home
         env:
           CHEZMOI_VERSION: ${{ matrix.chezmoi }}
           PROFILE: ${{ matrix.profile }}
-        run: CHEZMOI_BIN="$(mise where "chezmoi@$CHEZMOI_VERSION")/chezmoi" scripts/validate-chezmoi "$PROFILE"
+        run: CHEZMOI_BIN="$(mise where "chezmoi@$CHEZMOI_VERSION")/chezmoi" mise exec shellcheck -- scripts/validate-chezmoi "$PROFILE"
 
       - name: Assert validation did not modify tracked files
         run: git diff --exit-code
@@ -100,11 +104,11 @@ jobs:
           version: ${{ env.MISE_VERSION }}
           install: false
 
-      - name: Install pinned chezmoi
-        run: mise install chezmoi@2.71.0
+      - name: Install pinned chezmoi and linters
+        run: mise install chezmoi@2.71.0 shellcheck
 
       - name: Validate rendered terminal configuration
-        run: CHEZMOI_BIN="$(mise where chezmoi@2.71.0)/chezmoi" scripts/validate-chezmoi personal
+        run: CHEZMOI_BIN="$(mise where chezmoi@2.71.0)/chezmoi" mise exec shellcheck -- scripts/validate-chezmoi personal
 
       - name: Assert validation did not modify tracked files
         run: git diff --exit-code
