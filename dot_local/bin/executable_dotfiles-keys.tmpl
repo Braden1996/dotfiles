@@ -41,8 +41,10 @@ readonly SSH_INCLUDE_DIR={{ joinPath .chezmoi.homeDir .credentials.sshIncludeDir
 readonly GIT_NAME={{ .gitName | quote }}
 readonly DEFAULT_EMAIL={{ .defaultEmail | quote }}
 readonly TOKEN_ITEM={{ .credentials.tokenItem | quote }}
+readonly TOKEN_ITEM_PREFIX={{ .credentials.tokenItemPrefix | quote }}
 readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
 readonly TOKEN_FIELD={{ .credentials.tokenField | quote }}
+readonly TOKEN_USER_FIELD={{ .credentials.tokenUserField | quote }}
 readonly KEY_LIFETIME={{ .credentials.agentKeyLifetime | quote }}
 readonly KEYCHAIN_SERVICE={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 readonly TOKEN_FILE={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
@@ -82,7 +84,10 @@ Commands:
                              [--vault <vault>]
   load          Read this machine's keys from 1Password into the ssh-agent
   unload        Drop the loaded keys from the ssh-agent
-  token         Print the GitHub token from the vault, for GH_TOKEN
+  gh            Run gh with a verified, identity-scoped token
+                gh <slug> -- <gh arguments...>
+  token         Print a GitHub token from the vault
+                token [<slug>]
 
 Keys are per-machine, named for this host, so retiring one machine does not
 rotate any other machine's credentials. Private keys are never written to
@@ -222,6 +227,7 @@ account_item_title() {
   case "$kind" in
     auth) printf '%s (%s %s)' "$AUTH_ITEM_PREFIX" "$machine" "$slug" ;;
     sign) printf '%s (%s %s)' "$SIGN_ITEM_PREFIX" "$machine" "$slug" ;;
+    token) printf '%s (%s %s)' "$TOKEN_ITEM_PREFIX" "$machine" "$slug" ;;
   esac
 }
 
@@ -1638,20 +1644,157 @@ cmd_store_token() {
   fi
 }
 
+resolve_token_item_id() {
+  local title="$1" token_item_id
+  if ! token_item_id="$(resolve_item_id "$title")" || [[ -z "$token_item_id" ]]; then
+    fail "could not find $title in $VAULT"
+    return 1
+  fi
+  printf '%s' "$token_item_id"
+}
+
+read_token_credential() {
+  local token_item_id="$1" title="$2" token_reference token
+  token_reference="$(reference "$token_item_id" "$TOKEN_FIELD")" || return 1
+  if ! token="$(op_run read --no-newline "$token_reference")"; then
+    fail "could not read $TOKEN_FIELD from $title in $VAULT"
+    return 1
+  fi
+  if [[ -z "$token" ]]; then
+    fail "$TOKEN_FIELD is empty in $title"
+    return 1
+  fi
+  if [[ "$token" == *[[:space:]]* ]]; then
+    fail "$TOKEN_FIELD contains whitespace in $title"
+    return 1
+  fi
+  printf '%s' "$token"
+}
+
+read_token_username() {
+  local token_item_id="$1" title="$2" vault_id username
+  vault_id="$(resolve_vault_id)" || return 1
+  if ! username="$(
+    op_run item get "$token_item_id" \
+      --vault "$vault_id" \
+      --fields label="$TOKEN_USER_FIELD" \
+      --reveal 2>/dev/null
+  )" || [[ -z "$username" ]]; then
+    fail "could not read $TOKEN_USER_FIELD from $title in $VAULT"
+    return 1
+  fi
+  if [[ "$username" == *[[:space:]]* ]]; then
+    fail "$TOKEN_USER_FIELD contains whitespace in $title"
+    return 1
+  fi
+  printf '%s' "$username"
+}
+
 cmd_token() {
-  # Callers do `GH_TOKEN="$(dotfiles-keys token)"`, so stdout carries the token
-  # and nothing else. Keep every prerequisite diagnostic on stderr.
+  # stdout carries only the token. A slug selects exactly one machine+identity
+  # item; it must never fall back to the legacy unsuffixed item.
+  local slug="" title="$TOKEN_ITEM"
+  case "$#" in
+    0) ;;
+    1)
+      case "$1" in
+        -h | --help)
+          note "usage: dotfiles-keys token [<slug>]"
+          return 0
+          ;;
+        -*)
+          fail "unknown token option: $1"
+          return 2
+          ;;
+        *) slug="$1" ;;
+      esac
+      ;;
+    *)
+      fail "usage: dotfiles-keys token [<slug>]"
+      return 2
+      ;;
+  esac
+
   { require_command op && require_vault; } >&2 || return 1
+  if [[ -n "$slug" ]]; then
+    if ! valid_slug "$slug"; then
+      fail "identity slugs must start with a letter or number and contain only"
+      fail "letters, numbers, dot, underscore and hyphen"
+      return 2
+    fi
+    require_safe_machine >&2 || return 1
+    title="$(account_item_title token "$MACHINE" "$slug")"
+  fi
 
   local token_item_id
-  if ! token_item_id="$(resolve_item_id "$TOKEN_ITEM")" || [[ -z "$token_item_id" ]]; then
-    fail "could not find $TOKEN_ITEM in $VAULT" >&2
+  token_item_id="$(resolve_token_item_id "$title")" || return 1
+  read_token_credential "$token_item_id" "$title"
+}
+
+cmd_gh() {
+  case "${1:-}" in
+    -h | --help)
+      note "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+      return 0
+      ;;
+    "")
+      fail "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+      return 2
+      ;;
+    -*)
+      fail "identity slug cannot be an option: $1"
+      return 2
+      ;;
+  esac
+
+  local slug="$1"
+  shift
+  if ! valid_slug "$slug"; then
+    fail "identity slugs must start with a letter or number and contain only"
+    fail "letters, numbers, dot, underscore and hyphen"
+    return 2
+  fi
+  if [[ "${1:-}" != "--" ]]; then
+    fail "separate dotfiles-keys and gh arguments with --"
+    fail "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+    return 2
+  fi
+  shift
+  if (($# == 0)); then
+    fail "no gh command was provided"
+    return 2
+  fi
+
+  require_command op || return 1
+  require_command gh || return 1
+  require_vault || return 1
+  require_safe_machine || return 1
+
+  local title token_item_id expected_user token actual_user
+  title="$(account_item_title token "$MACHINE" "$slug")"
+  token_item_id="$(resolve_token_item_id "$title")" || return 1
+  expected_user="$(read_token_username "$token_item_id" "$title")" || return 1
+  token="$(read_token_credential "$token_item_id" "$title")" || return 1
+
+  # A non-empty GH_TOKEN takes precedence over gh's stored login. Pinning the
+  # host and validating the token's account before the requested command makes
+  # every failure closed: the ambient gh account is never considered.
+  if ! actual_user="$(
+    GH_TOKEN="$token" GH_HOST=github.com gh api user --jq .login 2>/dev/null
+  )" || [[ -z "$actual_user" ]]; then
+    fail "$title could not authenticate to github.com"
     return 1
   fi
-  if ! op_run read --no-newline "$(reference "$token_item_id" "$TOKEN_FIELD")"; then
-    fail "could not read $TOKEN_ITEM from $VAULT"
+
+  local normalized_actual normalized_expected
+  normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual_user")"
+  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
+  if [[ "$normalized_actual" != "$normalized_expected" ]]; then
+    fail "$title authenticates as '$actual_user', expected '$expected_user'"
     return 1
   fi
+
+  GH_TOKEN="$token" GH_HOST=github.com gh "$@"
 }
 
 main() {
@@ -1675,7 +1818,14 @@ main() {
     sync-signers) cmd_sync_signers ;;
     load) cmd_load ;;
     unload) cmd_unload ;;
-    token) cmd_token ;;
+    gh)
+      shift
+      cmd_gh "$@"
+      ;;
+    token)
+      shift
+      cmd_token "$@"
+      ;;
     -h | --help | help) usage ;;
     *)
       fail "unknown command: $command"

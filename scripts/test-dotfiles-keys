@@ -46,6 +46,25 @@ assert_contains() {
 	fi
 }
 
+assert_not_contains() {
+	local file=$1 text=$2 message=$3
+	if grep -Fq -- "$text" "$file"; then
+		printf 'FAIL: %s\n  unexpected text in: %s\n' "$message" "$file" >&2
+		exit 1
+	fi
+}
+
+assert_tokens_not_logged() {
+	local log token_value
+	for log in "$FAKE_STATE/op-calls" "$FAKE_STATE/gh-calls" \
+		"$FAKE_STATE/gh-contexts" "$FAKE_STATE/gh-adds" "$FAKE_STATE/ssh-adds"; do
+		for token_value in fixture-scoped-correct fixture-scoped-wrong fixture-legacy; do
+			assert_not_contains "$log" "$token_value" \
+				"credential values must never be written to command logs"
+		done
+	done
+}
+
 item_count() {
 	local title=$1 vault=$2
 	awk -F'|' -v title="$title" -v vault="$vault" \
@@ -55,9 +74,10 @@ item_count() {
 
 seed_item() {
 	local id=$1 category=$2 title=$3 vault=$4 public_key=$5
-	local email=${6:-} scope=${7:-}
-	printf '%s|%s|%s|%s|%s|%s|%s\n' \
+	local email=${6:-} scope=${7:-} username=${8:-} credential=${9:-}
+	printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
 		"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope" \
+		"$username" "$credential" \
 		>>"$FAKE_STATE/items"
 }
 
@@ -69,11 +89,14 @@ new_case() {
 	: >"$FAKE_STATE/items"
 	: >"$FAKE_STATE/op-calls"
 	: >"$FAKE_STATE/gh-calls"
+	: >"$FAKE_STATE/gh-contexts"
 	: >"$FAKE_STATE/gh-adds"
 	: >"$FAKE_STATE/ssh-adds"
 	unset FAKE_GH_FAIL_TYPE
 	unset FAKE_GH_USER
 	unset FAKE_OP_FAIL_FIELD
+	unset GH_TOKEN
+	unset GITHUB_TOKEN
 }
 
 # ---------------------------------------------------------------------------
@@ -117,9 +140,9 @@ same_vault() {
 item_json_list() {
 	local requested_vault=$1 requested_category=$2
 	local first=true
-	local id category title vault public_key email scope
+	local id category title vault public_key email scope username credential
 	printf '['
-	while IFS='|' read -r id category title vault public_key email scope; do
+	while IFS='|' read -r id category title vault public_key email scope username credential; do
 		[[ -n "$id" ]] || continue
 		if [[ -n "$requested_vault" ]] && ! same_vault "$vault" "$requested_vault"; then
 			continue
@@ -139,8 +162,8 @@ item_json_list() {
 
 find_item() {
 	local wanted=$1 requested_vault=$2
-	local id category title vault public_key email scope
-	while IFS='|' read -r id category title vault public_key email scope; do
+	local id category title vault public_key email scope username credential
+	while IFS='|' read -r id category title vault public_key email scope username credential; do
 		[[ -n "$id" ]] || continue
 		if [[ "$id" != "$wanted" && "$title" != "$wanted" ]]; then
 			continue
@@ -148,8 +171,9 @@ find_item() {
 		if [[ -n "$requested_vault" ]] && ! same_vault "$vault" "$requested_vault"; then
 			continue
 		fi
-		printf '%s|%s|%s|%s|%s|%s|%s\n' \
-			"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope"
+		printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+			"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope" \
+			"$username" "$credential"
 		return 0
 	done <"$FAKE_STATE/items"
 	return 1
@@ -222,7 +246,7 @@ case "${1:-} ${2:-}" in
 		printf "item not found: %s\n" "$wanted" >&2
 		exit 1
 	fi
-	IFS='|' read -r id category title vault public_key email scope <<<"$row"
+	IFS='|' read -r id category title vault public_key email scope username credential <<<"$row"
 	if [[ "$format" == json ]]; then
 		printf '{"id":"%s","title":"%s"}\n' "$id" "$title"
 	elif [[ -n "$field" ]]; then
@@ -234,6 +258,8 @@ case "${1:-} ${2:-}" in
 		"public key") printf '%s\n' "$public_key" ;;
 		email) printf '%s\n' "$email" ;;
 		scope) printf '%s\n' "$scope" ;;
+		username) printf '%s\n' "$username" ;;
+		credential) printf '%s\n' "$credential" ;;
 		*) exit 1 ;;
 		esac
 	else
@@ -246,6 +272,8 @@ case "${1:-} ${2:-}" in
 	vault=""
 	email=""
 	scope=""
+	username=""
+	credential=""
 	shift 2
 	while (($# > 0)); do
 		case "$1" in
@@ -269,6 +297,14 @@ case "${1:-} ${2:-}" in
 			scope=${1#scope\[text\]=}
 			shift
 			;;
+		username\[text\]=*)
+			username=${1#username\[text\]=}
+			shift
+			;;
+		credential*=*)
+			credential=${1#*=}
+			shift
+			;;
 		*)
 			shift
 			;;
@@ -281,8 +317,9 @@ case "${1:-} ${2:-}" in
 	if [[ "$category" == "SSH Key" ]]; then
 		public_key="ssh-ed25519 TEST-$id $title"
 	fi
-	printf '%s|%s|%s|%s|%s|%s|%s\n' \
+	printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
 		"$id" "$category" "$title" "$vault" "$public_key" "$email" "$scope" \
+		"$username" "$credential" \
 		>>"$FAKE_STATE/items"
 	printf '{"id":"%s"}\n' "$id"
 	;;
@@ -292,15 +329,28 @@ case "${1:-} ${2:-}" in
 	printf '{}\n'
 	;;
 "read "*)
-	reference=${2:-}
+	reference=""
+	for argument in "$@"; do
+		case "$argument" in
+		op://*) reference=$argument ;;
+		esac
+	done
+	[[ -n "$reference" ]] || exit 1
 	without_scheme=${reference#op://}
 	after_vault=${without_scheme#*/}
 	id=${after_vault%%/*}
-	if ! find_item "$id" "" >/dev/null; then
+	field=${after_vault#*/}
+	field=${field%%\?*}
+	if ! row=$(find_item "$id" ""); then
 		printf 'item not found: %s\n' "$id" >&2
 		exit 1
 	fi
-	printf 'test-private-input-for-%s\n' "$id"
+	IFS='|' read -r id category title vault public_key email scope username credential <<<"$row"
+	if [[ "$field" == credential ]]; then
+		printf '%s' "$credential"
+	else
+		printf 'test-private-input-for-%s\n' "$id"
+	fi
 	;;
 *)
 	printf 'unsupported fake op call: %s\n' "$*" >&2
@@ -320,6 +370,30 @@ for argument in "$@"; do
 done
 printf '\n' >>"$FAKE_STATE/gh-calls"
 
+case "${GH_TOKEN:-}" in
+fixture-scoped-correct)
+	token_context=scoped-correct
+	token_user=Braden1996
+	;;
+fixture-scoped-wrong)
+	token_context=scoped-wrong
+	token_user=SomebodyElse
+	;;
+fixture-legacy)
+	token_context=legacy
+	token_user=LegacyAccount
+	;;
+"")
+	token_context=ambient
+	token_user=${FAKE_GH_USER:-test-user}
+	;;
+*)
+	token_context=unknown
+	token_user=UnknownTokenAccount
+	;;
+esac
+printf '%s\n' "$token_context" >>"$FAKE_STATE/gh-contexts"
+
 case "${1:-} ${2:-}" in
 "auth status")
 	printf "Token scopes: 'repo', 'admin:ssh_signing_key'\n" >&2
@@ -327,7 +401,10 @@ case "${1:-} ${2:-}" in
 "auth refresh")
 	;;
 "api user" | "api /user")
-	printf '%s\n' "${FAKE_GH_USER:-test-user}"
+	printf '%s\n' "$token_user"
+	;;
+"pr create")
+	printf 'created pull request\n'
 	;;
 "ssh-key add")
 	key_file=${3:-}
@@ -610,6 +687,139 @@ test_work_backend_refuses_writes() {
 		"service-account helper must not publish GitHub keys"
 }
 
+test_gh_wrapper_missing_scoped_token() {
+	new_case gh-missing-token
+	# Even an ambient session for the requested account must not be used.
+	export FAKE_GH_USER=Braden1996
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "gh wrapper should fail when its exact scoped token item is missing"
+	fi
+
+	assert_contains "$FAKE_STATE/op-calls" \
+		$'item\tget\tGitHub Machine PAT (ci-work personal)' \
+		"gh wrapper should look up the exact machine-and-identity token title"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"missing scoped token must not fall back to ambient gh authentication"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_empty_token() {
+	new_case gh-empty-token
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" ""
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "gh wrapper should reject an empty scoped credential"
+	fi
+
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"empty token must fail before invoking gh"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_missing_username() {
+	new_case gh-missing-username
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "" "fixture-scoped-correct"
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "gh wrapper should reject a token item without a username"
+	fi
+
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"missing token username must fail before invoking gh"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_wrong_token_account() {
+	new_case gh-wrong-account
+	# The ambient account is deliberately correct. The scoped token is not, and
+	# must therefore fail rather than falling back to that ambient session.
+	export FAKE_GH_USER=Braden1996
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-wrong"
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "gh wrapper should reject a token authenticated as another account"
+	fi
+
+	assert_contains "$FAKE_STATE/gh-calls" $'api\tuser\t--jq\t.login' \
+		"gh wrapper should verify the token account before the requested command"
+	assert_not_contains "$FAKE_STATE/gh-calls" $'pr\tcreate' \
+		"wrong-account token must not run the requested gh command"
+	assert_not_contains "$FAKE_STATE/gh-contexts" ambient \
+		"wrong-account token must not fall back to ambient authentication"
+	assert_eq 1 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"gh wrapper must not mutate the service-account vault"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_correct_scoped_token() {
+	new_case gh-correct-token
+	# Explicit ambient credentials must be overwritten, not merely ignored when
+	# absent. The scoped credential is the only one either gh invocation sees.
+	export GH_TOKEN=fixture-scoped-wrong
+	export GITHUB_TOKEN=fixture-legacy
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-correct"
+
+	local raw_token
+	raw_token="$(run_helper "$work_helper" token personal)"
+	if [[ "$raw_token" != fixture-scoped-correct ]]; then
+		fail "token personal should print only the exact scoped credential"
+	fi
+	run_helper "$work_helper" gh personal -- pr create --title test >/dev/null
+
+	assert_contains "$FAKE_STATE/gh-calls" $'api\tuser\t--jq\t.login' \
+		"gh wrapper should verify the scoped token account"
+	assert_contains "$FAKE_STATE/gh-calls" $'pr\tcreate\t--title\ttest' \
+		"gh wrapper should forward every argument after --"
+	if grep -Fvx scoped-correct "$FAKE_STATE/gh-contexts" >/dev/null; then
+		fail "every gh invocation should use the scoped credential"
+	fi
+	assert_eq 1 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"successful service-account gh wrapper must remain vault-read-only"
+	assert_not_contains "$FAKE_STATE/op-calls" $'item\tcreate' \
+		"gh wrapper must never create vault items"
+	assert_not_contains "$FAKE_STATE/op-calls" $'item\tedit' \
+		"gh wrapper must never edit vault items"
+	assert_tokens_not_logged
+	unset raw_token
+}
+
+test_raw_token_legacy_and_no_scoped_fallback() {
+	new_case token-legacy
+	seed_item legacy-token "API Credential" "GitHub Machine PAT" \
+		"Target<>Vault" "" "" "" "" "fixture-legacy"
+
+	local raw_token
+	raw_token="$(run_helper "$work_helper" token)"
+	if [[ "$raw_token" != fixture-legacy ]]; then
+		fail "token without an identity should retain the legacy item behavior"
+	fi
+	if run_helper "$work_helper" token personal >/dev/null 2>&1; then
+		fail "token personal must not fall back to the legacy token item"
+	fi
+	export FAKE_GH_USER=Braden1996
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "gh personal must not fall back to the legacy or ambient token"
+	fi
+
+	assert_contains "$FAKE_STATE/op-calls" \
+		$'item\tget\tGitHub Machine PAT (ci-work personal)' \
+		"scoped token commands should use an exact item lookup"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"missing scoped token must fail before gh even when legacy and ambient auth exist"
+	assert_tokens_not_logged
+	unset raw_token
+}
+
 test_end_to_end_cross_vault_workflow() {
 	new_case end-to-end
 
@@ -829,6 +1039,12 @@ run_test "GitHub user mismatch is read-only" test_github_user_mismatch_is_read_o
 run_test "help and empty options are read-only" test_help_and_empty_options_are_read_only
 run_test "unsafe configured machine is read-only" test_unsafe_configured_machine_is_read_only
 run_test "service-account writes are refused" test_work_backend_refuses_writes
+run_test "gh wrapper rejects missing scoped token" test_gh_wrapper_missing_scoped_token
+run_test "gh wrapper rejects empty token" test_gh_wrapper_empty_token
+run_test "gh wrapper rejects missing username" test_gh_wrapper_missing_username
+run_test "gh wrapper rejects wrong token account" test_gh_wrapper_wrong_token_account
+run_test "gh wrapper uses correct scoped token" test_gh_wrapper_correct_scoped_token
+run_test "raw token legacy behavior is isolated" test_raw_token_legacy_and_no_scoped_fallback
 run_test "end-to-end cross-vault workflow" test_end_to_end_cross_vault_workflow
 run_test "load default and identity keypairs" test_loads_default_and_identity_pairs
 run_test "partial pair preserves routing" test_partial_pair_preserves_routing

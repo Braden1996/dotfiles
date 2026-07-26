@@ -67,6 +67,7 @@ current values, so enter keeps them. Git doesn't sign until step 5 completes.
 | Provision another machine's default GitHub keys | `dotfiles-keys provision <machine> --vault <vault> --github-user <login>` |
 | Provision another GitHub account for an identity | `dotfiles-keys provision <machine> --identity <slug> --vault <vault> --github-user <login>` |
 | Added a machine or account identity elsewhere | `dotfiles-keys sync && dotfiles-keys load` |
+| Run `gh` as an account identity | `dotfiles-keys gh <slug> -- <gh arguments...>` |
 | Something feels wrong | `dotfiles-doctor` |
 | Routine update | `dotfiles-update --check`, then `dotfiles-update` |
 | Changed the source | `chezmoi diff && chezmoi apply` |
@@ -288,7 +289,10 @@ Commands:
                              [--vault <vault>]
   load          Read this machine's keys from 1Password into the ssh-agent
   unload        Drop the loaded keys from the ssh-agent
-  token         Print the GitHub token from the vault, for GH_TOKEN
+  gh            Run gh with a verified, identity-scoped token
+                gh <slug> -- <gh arguments...>
+  token         Print a GitHub token from the vault
+                token [<slug>]
 
 Keys are per-machine, named for this host, so retiring one machine does not
 rotate any other machine's credentials. Private keys are never written to
@@ -517,15 +521,34 @@ keys and vault items when retiring that machine.
 
 ### The GitHub token (optional)
 
-`gh` needs an API token and a work machine can't log in interactively:
+`gh` needs an API token and a work machine cannot log in interactively. Create
+a short-lived fine-grained PAT in GitHub's UI, then store it as a 1Password
+API Credential in the machine's configured vault:
+
+- **Title:** `GitHub Machine PAT (<machine> <slug>)`
+- **Username:** the GitHub login that owns the token, such as `Braden1996`
+- **Credential:** the PAT
+
+The slug is the same one used by `Git Identity (<slug>)` and the
+account-specific SSH keys. Run `gh` through the helper:
 
 ```bash
-GH_TOKEN="$(dotfiles-keys token)" gh pr list
+dotfiles-keys gh personal -- pr create --fill
 ```
 
-Nothing creates it — GitHub has no API for minting fine-grained PATs. Make one in the UI, store
-it in the vault as `GitHub Machine PAT` with the token in its `credential` field. Revoking the
-service account does **not** revoke a copy already fetched, so keep the expiry short.
+Before running the requested command, the helper resolves only that exact
+machine+slug item, rejects missing or empty fields, pins `gh` to `github.com`,
+and checks that the token authenticates as the item's username. It never falls
+back to the legacy token item or the account stored by `gh`.
+
+For a non-`gh` integration, `dotfiles-keys token <slug>` prints the same scoped
+credential. A scoped lookup never falls back to another item. The no-argument
+`dotfiles-keys token` form remains for backwards compatibility and reads the
+legacy `GitHub Machine PAT` item, but the `gh` wrapper never uses it.
+
+Nothing creates the PAT — GitHub has no API for minting fine-grained PATs.
+Revoking the service account does **not** revoke a copy already fetched, so
+keep the expiry short.
 
 ### Privacy
 

@@ -7,7 +7,10 @@
 # touching the others, and what makes a signature attributable to a machine.
 authItemPrefix = "GitHub Machine Auth"
 signItemPrefix = "GitHub Machine Sign"
+# Kept for backwards compatibility with `dotfiles-keys token` without an
+# identity. New tokens are machine+identity scoped using tokenItemPrefix.
 tokenItem = "GitHub Machine PAT"
+tokenItemPrefix = "GitHub Machine PAT"
 # One 1Password item per git identity, in the vault matching the machine's trust
 # boundary. That vault IS the scope: a machine sees only identities deliberately
 # placed in the vault it can read. A work vault may include a personal-repository
@@ -30,6 +33,7 @@ sshIncludeDir = ".ssh/config.d"
 # reference lives with the code that uses it rather than being half-declared.
 publicKeyField = "public key"
 tokenField = "credential"
+tokenUserField = "username"
 # Work machines hold keys in agent memory with a lifetime, so a revoked service
 # account stops mattering by the next morning. Personal machines load without an
 # expiry: revocation was never their threat model, and an unattended agent that
