@@ -63,7 +63,7 @@ render_for_profile() {
   machineType = "$profile"
   machineName = "docs"
   gitName = "Docs"
-  personalEmail = "personal@example.com"
+  defaultEmail = "personal@example.com"
   opVault = "Example Vault"
 EOF
 

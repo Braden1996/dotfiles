@@ -45,7 +45,7 @@ read_if_present() {
 }
 recorded_auth_key="$(read_if_present "$HOME/.ssh/id_github_auth.pub")"
 recorded_sign_key="$(read_if_present "$HOME/.ssh/id_github_sign.pub")"
-personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
+default_email={{ get . "defaultEmail" | default "doctor@example.invalid" | quote }}
 service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
 service_account_keychain={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 
@@ -236,7 +236,7 @@ fi
 # active test off non-interactive runs (CI, pipes, editor tasks) regardless.
 if [[ -t 0 && -t 1 ]]; then
   if sign_test_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-doctor-sign.XXXXXX")"; then
-    test_signed_commit "$recorded_sign_key" "$personal_email"
+    test_signed_commit "$recorded_sign_key" "$default_email"
     rm -rf -- "$sign_test_root"
   else
     fail "could not create a disposable directory for signed-commit checks"
