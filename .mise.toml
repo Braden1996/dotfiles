@@ -22,7 +22,7 @@ run = [
 [tasks."check:data"]
 description = "Validate repository TOML and JSON data"
 run = [
-  "taplo lint --no-schema .chezmoidata.toml .chezmoiexternal.toml .gitleaks.toml .mise.toml dot_config/mise/config.toml dot_config/mise/mise.lock dot_config/starship.toml mise.lock",
+  "taplo lint --no-schema .chezmoidata.toml .gitleaks.toml .mise.toml dot_config/mise/config.toml dot_config/mise/mise.lock dot_config/starship.toml mise.lock",
   "for file in private_Library/private_Application\\ Support/private_Cursor/User/keybindings.json dot_config/nvim/dot_luarc.json dot_config/nvim/dot_neoconf.json; do biome format --json-parse-allow-comments=true --stdin-file-path \"$file\" < \"$file\" >/dev/null; done",
 ]
 
@@ -36,6 +36,14 @@ run = [
 [tasks."check:keys"]
 description = "Exercise dotfiles-keys against isolated 1Password, GitHub, and agent fakes"
 run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-dotfiles-keys"
+
+[tasks."check:flow-icons"]
+description = "Exercise staged Flow Icons updates with a fixture licence"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-flow-icons"
+
+[tasks."check:runtime-secrets"]
+description = "Exercise dotfiles-secrets without exposing fixture values"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-dotfiles-secrets"
 
 [tasks.docs]
 description = "Regenerate the README inventory from its sources of truth"
@@ -55,8 +63,8 @@ run = [
 [tasks."check:scripts"]
 description = "Lint repository validation scripts"
 run = [
-  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys",
-  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys",
+  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys scripts/test-dotfiles-secrets scripts/test-flow-icons",
+  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys scripts/test-dotfiles-secrets scripts/test-flow-icons",
 ]
 
 [tasks."check:secrets"]
@@ -68,7 +76,7 @@ run = [
 
 [tasks."check:static"]
 description = "Run fast, platform-independent checks"
-depends = ["check:actions", "check:data", "check:docs", "check:keys", "check:lua", "check:scripts", "check:secrets"]
+depends = ["check:actions", "check:data", "check:docs", "check:flow-icons", "check:keys", "check:runtime-secrets", "check:lua", "check:scripts", "check:secrets"]
 
 [tasks.check]
 description = "Run the complete local validation suite"

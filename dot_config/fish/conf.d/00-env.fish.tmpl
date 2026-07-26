@@ -20,8 +20,10 @@ set -l preferred_paths \
     "$HOME/.bun/bin" \
     "$HOME/.cargo/bin" \
     "$HOME/.antigravity/antigravity/bin" \
+{{- if eq .machineType "personal" }}
     "$HOME/.grok/bin" \
     "$HOME/.kimi-code/bin" \
+{{- end }}
     "$HOMEBREW_PREFIX/bin" \
     "$HOMEBREW_PREFIX/sbin" \
     /usr/local/bin

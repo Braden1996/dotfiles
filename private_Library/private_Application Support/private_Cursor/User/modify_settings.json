@@ -3,7 +3,8 @@
 {{- if .chezmoi.stdin -}}
 {{-   $currentCursorSettings = fromJsonc .chezmoi.stdin -}}
 {{- end -}}
-{{- $cursorFlowLicense := get $currentCursorSettings "flow-icons.licenseKey" -}}
+{{- $cursorFlowLicense := "" -}}
+{{-   $cursorFlowLicense = get $currentCursorSettings "flow-icons.licenseKey" -}}
 {
 	// ═══════════════════════════════════════════════════════════════════════════
 	// EDITOR: Visual Appearance
@@ -208,6 +209,7 @@
 {{ if $cursorFlowLicense }}
 	"flow-icons.licenseKey": {{ $cursorFlowLicense | quote }},
 {{ end }}
+	"settingsSync.ignoredSettings": ["flow-icons.licenseKey"],
 	"versionlens.suggestions.showOnStartup": false,
 	"RadonIDE.panelLocation": "tab",
 	"react-native-tools.showUserTips": false,

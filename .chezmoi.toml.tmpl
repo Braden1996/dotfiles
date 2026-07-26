@@ -53,18 +53,20 @@ resolves from the FQDN and can return something generic and network-dependent
 {{- $machineName := promptStringOnce . "machineName" "Short name for this machine, used to scope its GitHub keys" (or (get . "machineName") (output "hostname" "-s" | trim)) -}}
 
 {{/*
-The vault this machine keeps its keys and identities in is its trust boundary.
-A personal machine uses a vault only it can reach. A work machine uses the
-vault shared with its service account. That work vault may deliberately contain
-dedicated, per-work-machine keys for a personal GitHub account; it must never
-contain the personal machine's own reusable keys, because the service account
-can read every private key placed there.
+The vault this machine uses for dotfile credentials is its trust boundary. A
+personal machine uses a vault only it can reach; it may also hold application
+secrets such as Flow Icons. A work machine uses the vault shared with its
+service account. That work vault may deliberately contain dedicated,
+per-work-machine keys for a personal GitHub account; it must never contain the
+personal machine's own reusable keys or unapproved personal secrets. Explicitly
+work-approved application secrets such as Flow Icons may be copied into it,
+because the service account can read every secret placed there.
 
 Either a name or an ID works: dotfiles-keys resolves the name via `op vault get`
 before ever building a secret reference, so characters like `<>` that a
 reference would reject (verified against op 2.35.0) cause no trouble here.
 */}}
-{{- $opVault := promptStringOnce . "opVault" "1Password vault for this machine's GitHub keys (name or ID)" (or (get . "opVault") "") -}}
+{{- $opVault := promptStringOnce . "opVault" "1Password vault for this machine's dotfile credentials (name or ID)" (or (get . "opVault") "") -}}
 
 {{/*
 Work machines read their service account token from the login keychain. The

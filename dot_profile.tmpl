@@ -28,8 +28,10 @@ __braden_path_append "$HOME/.local/share/mise/shims"
 __braden_path_append "$HOME/.bun/bin"
 __braden_path_append "$HOME/.cargo/bin"
 __braden_path_append "$HOME/.antigravity/antigravity/bin"
+{{- if eq .machineType "personal" }}
 __braden_path_append "$HOME/.grok/bin"
 __braden_path_append "$HOME/.kimi-code/bin"
+{{- end }}
 __braden_path_append "$__braden_homebrew_prefix/bin"
 __braden_path_append "$__braden_homebrew_prefix/sbin"
 __braden_path_append /usr/local/bin

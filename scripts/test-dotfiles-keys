@@ -95,6 +95,7 @@ new_case() {
 	unset FAKE_GH_FAIL_TYPE
 	unset FAKE_GH_USER
 	unset FAKE_OP_FAIL_FIELD
+	unset FAKE_EXPECT_DESKTOP_AUTH_ONLY
 	unset GH_TOKEN
 	unset GITHUB_TOKEN
 }
@@ -106,6 +107,12 @@ new_case() {
 cat >"$fake_bin/op" <<'FAKE_OP'
 #!/usr/bin/env bash
 set -uo pipefail
+
+if [[ "${FAKE_EXPECT_DESKTOP_AUTH_ONLY:-0}" == 1 ]] &&
+	[[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}${OP_CONNECT_HOST:-}${OP_CONNECT_TOKEN:-}" ]]; then
+	printf 'ambient non-desktop authentication reached op\n' >&2
+	exit 97
+fi
 
 log_call() {
 	local separator=""
@@ -704,6 +711,25 @@ test_gh_wrapper_missing_scoped_token() {
 	assert_tokens_not_logged
 }
 
+test_desktop_backend_clears_non_desktop_auth() {
+	new_case desktop-auth-boundary
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-personal personal)" "Configured Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-correct"
+	export FAKE_EXPECT_DESKTOP_AUTH_ONLY=1
+
+	local raw_token
+	raw_token="$(
+		OP_SERVICE_ACCOUNT_TOKEN=ambient-service-token \
+			OP_CONNECT_HOST=https://connect.invalid \
+			OP_CONNECT_TOKEN=ambient-connect-token \
+			run_helper "$personal_helper" token personal
+	)"
+	unset FAKE_EXPECT_DESKTOP_AUTH_ONLY
+	assert_eq fixture-scoped-correct "$raw_token" \
+		"desktop backend should ignore ambient service-account and Connect auth"
+}
+
 test_gh_wrapper_empty_token() {
 	new_case gh-empty-token
 	seed_item scoped-token "API Credential" \
@@ -1039,6 +1065,7 @@ run_test "GitHub user mismatch is read-only" test_github_user_mismatch_is_read_o
 run_test "help and empty options are read-only" test_help_and_empty_options_are_read_only
 run_test "unsafe configured machine is read-only" test_unsafe_configured_machine_is_read_only
 run_test "service-account writes are refused" test_work_backend_refuses_writes
+run_test "desktop auth boundary is explicit" test_desktop_backend_clears_non_desktop_auth
 run_test "gh wrapper rejects missing scoped token" test_gh_wrapper_missing_scoped_token
 run_test "gh wrapper rejects empty token" test_gh_wrapper_empty_token
 run_test "gh wrapper rejects missing username" test_gh_wrapper_missing_username

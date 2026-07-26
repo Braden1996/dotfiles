@@ -6,9 +6,14 @@ assets/**
 mise.lock
 scripts/**
 
+{{ if eq .machineType "work" }}
+.grok/**
+{{ end }}
+
 {{ if ne .chezmoi.os "darwin" }}
 Library/**
 .config/ghostty/**
+.local/bin/dotfiles-flow-icons
 {{ end }}
 
 {{/*

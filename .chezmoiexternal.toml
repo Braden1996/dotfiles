@@ -19,11 +19,11 @@ exact = true
 stripComponents = 1
 checksum.sha256 = "970a0792ca8a1185dc6ad9c442a670100a28143fa5e739718b285a417d7c45f2"
 
+{{ if eq .chezmoi.os "darwin" }}
 [".local/share/chezmoi-externals/flow-icons-zed"]
-type = "git-repo"
-url = "https://github.com/BenjaminHalko/flow-icons-zed.git"
-refreshPeriod = "168h"
-  [".local/share/chezmoi-externals/flow-icons-zed".clone]
-  args = ["--depth", "1"]
-  [".local/share/chezmoi-externals/flow-icons-zed".pull]
-  args = ["--ff-only"]
+type = "archive"
+url = "https://codeload.github.com/BenjaminHalko/flow-icons-zed/tar.gz/{{ .flowIcons.revision }}"
+exact = true
+stripComponents = 1
+checksum.sha256 = "{{ .flowIcons.archiveSha256 }}"
+{{ end }}

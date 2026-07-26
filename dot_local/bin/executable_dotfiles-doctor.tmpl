@@ -47,6 +47,7 @@ recorded_auth_key="$(read_if_present "$HOME/.ssh/id_github_auth.pub")"
 recorded_sign_key="$(read_if_present "$HOME/.ssh/id_github_sign.pub")"
 default_email={{ get . "defaultEmail" | default "doctor@example.invalid" | quote }}
 service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
+service_account_keychain_account={{ .chezmoi.username | quote }}
 service_account_keychain={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 
 ok_count=0
@@ -209,23 +210,27 @@ elif [[ -n "$recorded_sign_key" ]]; then
 fi
 
 if [[ "$credential_backend" == "service-account" ]]; then
-  # The keychain is preferred over a plaintext file: a 0600 file is readable by
-  # anything running as this user, whereas a keychain item is encrypted at rest
-  # and gated by its own access control.
+  # The Keychain gives stronger at-rest protection, but is not same-user
+  # process isolation while the login keychain is unlocked.
   if command -v security >/dev/null 2>&1 &&
-    security find-generic-password -s "$service_account_keychain" >/dev/null 2>&1; then
+    security find-generic-password \
+      -a "$service_account_keychain_account" \
+      -s "$service_account_keychain" >/dev/null 2>&1; then
     pass "service account token is in the login keychain"
     if [[ -e "$service_account_token_file" ]]; then
       warn "a plaintext token also exists at $service_account_token_file; delete it"
     fi
-  elif [[ -r "$service_account_token_file" ]]; then
+  elif [[ -f "$service_account_token_file" &&
+    ! -L "$service_account_token_file" &&
+    -r "$service_account_token_file" ]]; then
     # GNU first: BSD stat rejects -c and prints nothing, while GNU stat reads
     # -f as --file-system and prints a filesystem report before failing.
     token_mode="$(stat -c '%a' "$service_account_token_file" 2>/dev/null || stat -f '%OLp' "$service_account_token_file" 2>/dev/null)"
-    if [[ "$token_mode" == "600" ]]; then
+    token_owner="$(stat -c '%u' "$service_account_token_file" 2>/dev/null || stat -f '%u' "$service_account_token_file" 2>/dev/null)"
+    if [[ "$token_mode" == "600" && "$token_owner" == "$(id -u)" ]]; then
       warn "service account token is a plaintext file; prefer: dotfiles-keys store-token"
     else
-      fail "service account token mode is ${token_mode:-unknown}; expected 0600"
+      fail "service account token file must be owned by this user with mode 0600"
     fi
   else
     fail "no service account token found; run: dotfiles-keys store-token"
@@ -334,7 +339,8 @@ if command -v mise >/dev/null 2>&1; then
 fi
 
 printf '\nPrivacy\n'
-{{ range $name, $value := .privacyEnv }}check_env {{ $name | quote }} {{ $value | quote }}
+{{ range $name, $value := .privacyEnv }}{{ if or (ne $name "GROK_TELEMETRY_ENABLED") (eq $.machineType "personal") }}check_env {{ $name | quote }} {{ $value | quote }}
+{{ end }}
 {{ end }}
 if command -v gt >/dev/null 2>&1; then
   warn "Graphite exposes no reliable telemetry-status query; GRAPHITE_DISABLE_TELEMETRY is best-effort and normal service metadata may still be logged"
