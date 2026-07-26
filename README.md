@@ -1,4 +1,13 @@
-# Dotfiles
+<p align="center">
+  <img src="assets/banner.webp" alt="Braden's Dotfiles" width="100%" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml"><img src="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" /></a>
+  <a href="https://www.chezmoi.io/"><img src="https://img.shields.io/badge/managed%20with-chezmoi-2f80ed" alt="managed with chezmoi" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS" />
+  <img src="https://img.shields.io/badge/shell-zsh%20%2B%20fish-4eaa25" alt="zsh and fish" />
+</p>
 
 My macOS workstation setup, managed with
 [chezmoi](https://www.chezmoi.io/). This is the rebuild and day-to-day cheat
