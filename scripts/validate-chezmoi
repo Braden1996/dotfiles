@@ -314,10 +314,14 @@ brewfile="$home_dir/.config/homebrew/Brewfile"
 # notice because CI never installs packages. One batched lookup per kind.
 if command -v brew >/dev/null 2>&1; then
 	# Read into arrays the long way: macOS ships bash 3.2, which has no mapfile.
+	# Tap-qualified names (withgraphite/tap/graphite) cannot be resolved unless
+	# that tap is already added, which it is not on a fresh CI runner. They also
+	# state their origin explicitly, so they are not the ambiguity this guard
+	# exists to catch -- skip them rather than fail on an unavailable tap.
 	declared_formulae=()
 	declared_casks=()
 	while IFS= read -r entry; do
-		[[ -n "$entry" ]] && declared_formulae+=("$entry")
+		[[ -n "$entry" && "$entry" != */* ]] && declared_formulae+=("$entry")
 	done < <(sed -nE 's/^brew "([^"]+)".*/\1/p' "$brewfile")
 	while IFS= read -r entry; do
 		[[ -n "$entry" ]] && declared_casks+=("$entry")
