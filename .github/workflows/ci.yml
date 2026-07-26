@@ -14,7 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MISE_VERSION: 2026.7.5
+  # Must match the mise that generated mise.lock. Newer mise writes `url_api`
+  # fields the committed lock does not have, so it rewrites the lock on any
+  # install that re-resolves a config-pinned tool -- which the tracked-file
+  # assertion below then fails on. Bump this and regenerate mise.lock together,
+  # never one without the other.
+  MISE_VERSION: 2026.5.0
 
 jobs:
   static:
