@@ -58,9 +58,18 @@ An ID works as well as a name here, and avoids trouble with special characters.
 */}}
 {{- $opVault := promptStringOnce . "opVault" "1Password vault for this machine's GitHub keys (name or ID)" (or (get . "opVault") "") -}}
 
+{{/*
+Work machines read their service account token from the login keychain. The
+service name is prompted rather than fixed, so a token already stored under
+some other name does not have to be recreated just to match this repository.
+Ignored on personal machines, which authenticate through the desktop app.
+*/}}
+{{- $opTokenKeychainService := promptStringOnce . "opTokenKeychainService" "Keychain service name holding the 1Password service account token (work machines)" (or (get . "opTokenKeychainService") "dotfiles-op-service-account") -}}
+
 [data]
   machineType = {{ $machineType | quote }}
   machineName = {{ $machineName | quote }}
   gitName = {{ $gitName | quote }}
   personalEmail = {{ $personalEmail | quote }}
   opVault = {{ $opVault | quote }}
+  opTokenKeychainService = {{ $opTokenKeychainService | quote }}

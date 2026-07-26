@@ -18,6 +18,12 @@ identityScopeField = "scope"
 # written at runtime from the vault. Relative to $HOME.
 identityIncludeFile = ".config/git/identities.gitconfig"
 identityDir = ".config/git/identities"
+# An identity may own credentials on a SEPARATE GitHub account. The signal is
+# simply that `GitHub Machine Auth (<machine> <slug>)` exists in the vault --
+# `dotfiles-keys provision` creates it, `sync` detects it. SSH then needs a host
+# alias to choose between accounts, written here and pulled in by an Include
+# from the chezmoi-managed ~/.ssh/config.
+sshIncludeDir = ".ssh/config.d"
 # The private-key reference is not listed here: reading it requires a
 # `?ssh-format=openssh` query that only the loader understands, so the whole
 # reference lives with the code that uses it rather than being half-declared.
@@ -31,8 +37,9 @@ agentKeyLifetime = "9h"
 # Where a work machine's service account token lives. The macOS Keychain is
 # preferred: a 0600 file is readable by anything running as the user, whereas a
 # Keychain item is encrypted at rest and gated by the item's access control.
-# The file remains a fallback for non-macOS hosts.
-serviceAccountKeychainService = "dotfiles-op-service-account"
+# The file remains a fallback for non-macOS hosts. The keychain SERVICE name is
+# machine-local (see opTokenKeychainService in .chezmoi.toml.tmpl) because an
+# existing item may already be named something else.
 # Machine-local, never managed by chezmoi, never committed. Relative to $HOME.
 serviceAccountTokenFile = ".config/op/service-account-token"
 

@@ -60,6 +60,7 @@ cat >"$config_file" <<EOF
   gitName = "Dotfiles CI"
   personalEmail = "personal@example.com"
   opVault = "$ci_vault"
+  opTokenKeychainService = "dotfiles-ci-token"
 EOF
 
 cm() {
@@ -89,6 +90,7 @@ while IFS= read -r -d '' template; do
 			--promptString "Git author name=Dotfiles CI" \
 			--promptString "Personal email address=personal@example.com" \
 			--promptString "1Password vault for this machine's GitHub keys (name or ID)=$ci_vault" \
+			--promptString "Keychain service name holding the 1Password service account token (work machines)=dotfiles-ci-token" \
 			--file "$template" >"$rendered"
 	else
 		cm execute-template --file "$template" >"$rendered"
@@ -170,6 +172,15 @@ ssh_config="$home_dir/.ssh/config"
 [[ "$(file_mode "$ssh_config")" == "600" ]]
 
 grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
+
+# Per-account host aliases are written at runtime by `dotfiles-keys sync`, so
+# chezmoi supplies only the Include. Templating them would need to know which
+# identities own credentials, which only the vault knows.
+grep -Fq 'Include ~/.ssh/config.d/*.conf' "$ssh_config"
+if cm managed | grep -Eq 'ssh/config\.d'; then
+	echo "per-account ssh blocks must not be managed by chezmoi" >&2
+	exit 1
+fi
 
 # Neither profile may pin an agent socket. The 1Password SSH agent asks approval
 # per client, which no unattended process can answer, so pinning it would stop

@@ -30,19 +30,21 @@ readonly VAULT={{ $vault | quote }}
 readonly MACHINE={{ $machine | quote }}
 readonly AUTH_ITEM={{ printf "%s (%s)" .credentials.authItemPrefix $machine | quote }}
 readonly SIGN_ITEM={{ printf "%s (%s)" .credentials.signItemPrefix $machine | quote }}
+readonly AUTH_ITEM_PREFIX={{ .credentials.authItemPrefix | quote }}
 readonly SIGN_ITEM_PREFIX={{ .credentials.signItemPrefix | quote }}
 readonly IDENTITY_PREFIX={{ .credentials.identityItemPrefix | quote }}
 readonly IDENTITY_EMAIL_FIELD={{ .credentials.identityEmailField | quote }}
 readonly IDENTITY_SCOPE_FIELD={{ .credentials.identityScopeField | quote }}
 readonly IDENTITY_INCLUDE={{ joinPath .chezmoi.homeDir .credentials.identityIncludeFile | quote }}
 readonly IDENTITY_DIR={{ joinPath .chezmoi.homeDir .credentials.identityDir | quote }}
+readonly SSH_INCLUDE_DIR={{ joinPath .chezmoi.homeDir .credentials.sshIncludeDir | quote }}
 readonly GIT_NAME={{ .gitName | quote }}
 readonly DEFAULT_EMAIL={{ .personalEmail | quote }}
 readonly TOKEN_ITEM={{ .credentials.tokenItem | quote }}
 readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
 readonly TOKEN_FIELD={{ .credentials.tokenField | quote }}
 readonly KEY_LIFETIME={{ .credentials.agentKeyLifetime | quote }}
-readonly KEYCHAIN_SERVICE={{ .credentials.serviceAccountKeychainService | quote }}
+readonly KEYCHAIN_SERVICE={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 readonly TOKEN_FILE={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
 readonly SSH_DIR={{ joinPath .chezmoi.homeDir ".ssh" | quote }}
 readonly ALLOWED_SIGNERS={{ joinPath .chezmoi.homeDir ".ssh/allowed_signers" | quote }}
@@ -80,6 +82,7 @@ Usage: dotfiles-keys <command>
 
 Commands:
   setup         Guided first run: check prerequisites, then generate, publish, sync
+  provision     Create+publish keys for ANOTHER machine: provision <machine> <slug> [vault]
   store-token   Store the service account token in the macOS keychain (work only)
   status        Report the credential backend, agent, and which keys are usable
   generate      Create this machine's SSH keys inside 1Password
@@ -134,7 +137,7 @@ service_account_token() {
   fi
   if command -v security >/dev/null 2>&1; then
     local from_keychain
-    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null)"; then
+    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" 2>/dev/null)"; then
       printf '%s' "$from_keychain"
       return 0
     fi
@@ -151,7 +154,7 @@ token_source() {
   if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
     printf 'environment'
   elif command -v security >/dev/null 2>&1 &&
-    security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$USER" >/dev/null 2>&1; then
+    security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
     printf 'keychain'
   elif [[ -r "$TOKEN_FILE" ]]; then
     printf 'file'
@@ -208,6 +211,17 @@ resolve_item_id() {
   vault_id="$(resolve_vault_id)" || return 1
   op_run item get "$1" --vault "$vault_id" --format json 2>/dev/null |
     jq -r '.id // empty'
+}
+
+# An identity that owns credentials on a separate GitHub account stores them
+# under the machine name plus the identity slug. Keeping the naming in one
+# place means `provision` on one machine and `sync` on another cannot drift.
+account_item_title() {
+  local kind="$1" machine="$2" slug="$3"
+  case "$kind" in
+    auth) printf '%s (%s %s)' "$AUTH_ITEM_PREFIX" "$machine" "$slug" ;;
+    sign) printf '%s (%s %s)' "$SIGN_ITEM_PREFIX" "$machine" "$slug" ;;
+  esac
 }
 
 reference() {
@@ -631,10 +645,14 @@ identity_rows() {
   ' <<<"$items" | sort -t"$(printf '\t')" -k2
 }
 
+# --reveal is required for fields stored as CONCEALED. New identities are
+# created as plain text below, but items made before that fix are concealed and
+# would otherwise read back as "[use 'op item get ...' to reveal]" -- which then
+# lands in the gitconfig as if it were an email address.
 identity_field() {
   local vault_id
   vault_id="$(resolve_vault_id)" || return 1
-  op_run item get "$1" --vault "$vault_id" --fields label="$2" 2>/dev/null
+  op_run item get "$1" --vault "$vault_id" --fields label="$2" --reveal 2>/dev/null
 }
 
 identity_emails() {
@@ -650,8 +668,13 @@ identity_emails() {
 # and .git-suffixed variants -- a clone made without the suffix does not match
 # a suffixed pattern, which silently drops the identity.
 emit_scope_rules() {
-  local scope="$1" target="$2" host="github.com"
-  local prefixes=("git@$host:" "ssh://git@$host/" "https://$host/")
+  local scope="$1" target="$2" alias_host="${3:-}"
+  local prefixes=("git@github.com:" "ssh://git@github.com/" "https://github.com/")
+  # A repo cloned through the per-account alias has a different remote URL, so
+  # match that too or the identity silently fails to apply to its own repos.
+  if [[ -n "$alias_host" ]]; then
+    prefixes+=("git@$alias_host:" "ssh://git@$alias_host/")
+  fi
   local suffixes=("")
   case "$scope" in
     */\*\*) ;;
@@ -664,6 +687,76 @@ emit_scope_rules() {
         "$prefix" "$scope" "$suffix" "$target"
     done
   done
+}
+
+# Run on a machine signed in to the GitHub account the keys should belong to.
+# A work laptop cannot create keys for a personal GitHub account without
+# logging that account in there, which is exactly what this avoids: the keys
+# are made here, published here, and only ever read over there.
+cmd_provision() {
+  require_command op || return 1
+  require_command gh || return 1
+
+  local machine="${1:-}" slug="${2:-}" vault="${3:-$VAULT}"
+  if [[ -z "$machine" || -z "$slug" ]]; then
+    fail "usage: dotfiles-keys provision <machine-name> <identity-slug> [vault]"
+    note "Example: dotfiles-keys provision work-macbook personal 'Braden<>Work'"
+    return 1
+  fi
+  if [[ "$BACKEND" == "service-account" ]]; then
+    fail "refusing to create items with a read-only service account"
+    return 1
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    fail "gh is not authenticated; run: gh auth login"
+    return 1
+  fi
+
+  local account
+  account="$(gh api user --jq .login 2>/dev/null)"
+  note "Publishing to GitHub account: ${account:-unknown}"
+
+  local kind title existing
+  for kind in auth sign; do
+    title="$(account_item_title "$kind" "$machine" "$slug")"
+    existing="$(op_run item list --vault "$vault" --format json 2>/dev/null |
+      jq -r --arg t "$title" '.[] | select(.title == $t) | .id' | head -1)"
+    if [[ -n "$existing" ]]; then
+      pass "already exists: $title"
+      continue
+    fi
+    if op_run item create --category ssh --title "$title" --vault "$vault" \
+      --ssh-generate-key ed25519 >/dev/null; then
+      pass "created $title in $vault"
+    else
+      fail "could not create $title"
+      return 1
+    fi
+  done
+
+  # Publish to whichever account gh is logged in as -- that is the whole point
+  # of running this here rather than on the target machine.
+  local key_type key_file public_key
+  for kind in auth sign; do
+    title="$(account_item_title "$kind" "$machine" "$slug")"
+    [[ "$kind" == auth ]] && key_type=authentication || key_type=signing
+    public_key="$(op_run item get "$title" --vault "$vault" --fields label="$PUBLIC_FIELD" --reveal 2>/dev/null)"
+    if [[ -z "$public_key" ]]; then
+      fail "could not read the public key for $title"
+      return 1
+    fi
+    key_file="$(mktemp "${TMPDIR:-/tmp}/dotfiles-provision.XXXXXX")" || return 1
+    printf '%s\n' "$public_key" >"$key_file"
+    if gh ssh-key add "$key_file" --type "$key_type" --title "$title"; then
+      pass "added $key_type key to ${account:-GitHub}"
+    else
+      warn "could not add the $key_type key; it may already be present"
+      [[ "$kind" == sign ]] && note "Signing keys need: gh auth refresh -h github.com -s admin:ssh_signing_key"
+    fi
+    rm -f -- "$key_file"
+  done
+
+  note "On $machine, run: dotfiles-keys sync"
 }
 
 cmd_sync_identities() {
@@ -683,6 +776,10 @@ cmd_sync_identities() {
     printf '# Identities come from the 1Password vault: %s\n\n' "$VAULT"
   } >"$staged_include"
 
+  rm -rf -- "$SSH_INCLUDE_DIR"
+  mkdir -p "$SSH_INCLUDE_DIR"
+  chmod 700 "$SSH_INCLUDE_DIR"
+
   local item_id slug email scope count=0
   while IFS="$(printf '\t')" read -r item_id slug; do
     [[ -n "$item_id" ]] || continue
@@ -692,14 +789,43 @@ cmd_sync_identities() {
       warn "skipping identity '$slug': needs both $IDENTITY_EMAIL_FIELD and $IDENTITY_SCOPE_FIELD"
       continue
     fi
-    printf '[user]\n\tname = %s\n\temail = %s\n' "$GIT_NAME" "$email" \
-      >"$staged_dir/$slug.gitconfig"
+
+    # Does this identity own credentials on a separate GitHub account? The
+    # presence of its key items in the vault is the signal -- nothing to
+    # configure, `provision` simply creates them.
+    local alias_host="" auth_key sign_key
+    auth_key="$(read_public_key "$(account_item_title auth "$MACHINE" "$slug")")"
+    sign_key="$(read_public_key "$(account_item_title sign "$MACHINE" "$slug")")"
+    if [[ -n "$auth_key" && -n "$sign_key" ]]; then
+      alias_host="github-$slug"
+      write_public_key "$SSH_DIR/id_github_auth_$slug.pub" "$auth_key" || return 1
+      write_public_key "$SSH_DIR/id_github_sign_$slug.pub" "$sign_key" || return 1
+      cat >"$SSH_INCLUDE_DIR/10-$slug.conf" <<SSHCONF
+# Generated by dotfiles-keys sync. Edits are lost.
+Host $alias_host
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_github_auth_$slug.pub
+  IdentitiesOnly yes
+SSHCONF
+      chmod 600 "$SSH_INCLUDE_DIR/10-$slug.conf"
+    fi
+
+    {
+      printf '[user]\n\tname = %s\n\temail = %s\n' "$GIT_NAME" "$email"
+      # Sign with this account's own key: a key registered on a different
+      # GitHub account cannot verify a commit authored under this email.
+      if [[ -n "$alias_host" ]]; then
+        printf '[user]\n\tsigningkey = ~/.ssh/id_github_sign_%s.pub\n' "$slug"
+      fi
+    } >"$staged_dir/$slug.gitconfig"
+
     # One item may carry several scopes, one per line.
     local one
     while IFS= read -r one; do
       one="${one//[[:space:]]/}"
       [[ -n "$one" ]] || continue
-      emit_scope_rules "$one" "$IDENTITY_DIR/$slug.gitconfig" >>"$staged_include"
+      emit_scope_rules "$one" "$IDENTITY_DIR/$slug.gitconfig" "$alias_host" >>"$staged_include"
     done <<<"$scope"
     count=$((count + 1))
   done <<<"$rows"
@@ -732,18 +858,42 @@ cmd_identity_add() {
     return 1
   fi
 
-  if op_run item create \
+  # [text] matters: without it op stores these as CONCEALED, and reading them
+  # back yields a placeholder rather than the value. Neither an email nor a
+  # repo glob is a secret.
+  local title="$IDENTITY_PREFIX ($slug)"
+  local existing
+  existing="$(resolve_item_id "$title" 2>/dev/null)"
+
+  if [[ -n "$existing" ]]; then
+    # Update rather than create: a second item with the same title makes every
+    # later lookup ambiguous and silently duplicates the routing rules.
+    if op_run item edit "$existing" \
+      --vault "$VAULT" \
+      "${IDENTITY_EMAIL_FIELD}[text]=$email" \
+      "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
+      pass "updated $title in $VAULT"
+    else
+      fail "could not update the existing identity item"
+      return 1
+    fi
+  elif op_run item create \
     --category "Secure Note" \
-    --title "$IDENTITY_PREFIX ($slug)" \
+    --title "$title" \
     --vault "$VAULT" \
-    "$IDENTITY_EMAIL_FIELD=$email" \
-    "$IDENTITY_SCOPE_FIELD=$scope" >/dev/null; then
-    pass "created $IDENTITY_PREFIX ($slug) in $VAULT"
-    cmd_sync_identities
+    "${IDENTITY_EMAIL_FIELD}[text]=$email" \
+    "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
+    pass "created $title in $VAULT"
   else
     fail "could not create the identity item"
     return 1
   fi
+
+  cmd_sync_identities || return 1
+  # The trust store lists one line per principal, and a new identity adds a
+  # principal. Skipping this would leave commits made under the new email
+  # unverifiable locally until the next unrelated sync.
+  cmd_sync_signers
 }
 
 # The vault is the only place that knows how many machines exist, so the trust
@@ -976,6 +1126,10 @@ main() {
   local command="${1:-status}"
   case "$command" in
     setup) cmd_setup ;;
+    provision)
+      shift
+      cmd_provision "$@"
+      ;;
     store-token) cmd_store_token ;;
     status) cmd_status ;;
     generate) cmd_generate ;;
