@@ -515,12 +515,28 @@ fi
 zed_settings="$home_dir/.config/zed/settings.json"
 flow_command="$home_dir/.local/bin/dotfiles-flow-icons"
 external_render="$temp_root/rendered/externals-$profile.toml"
+flow_icons_sha=$(awk -F'"' '/^archiveSha256/ { print $2 }' "$repo_root/.chezmoidata.toml")
 cm execute-template --file "$repo_root/.chezmoiexternal.toml" >"$external_render"
-[[ -x "$flow_command" ]]
+# Flow Icons is macOS-only: .chezmoiignore drops the command off darwin and
+# .chezmoiexternal.toml gates the archive the same way. Asserting either
+# unconditionally fails every Linux job over content never meant to be there.
+# Both directions are checked, so a change that wrongly ships it to Linux is
+# caught rather than silently tolerated.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	[[ -x "$flow_command" ]]
+	grep -Fq 'type = "archive"' "$external_render"
+	grep -Fq "$flow_icons_sha" "$external_render"
+else
+	if [[ -e "$flow_command" ]]; then
+		echo "dotfiles-flow-icons is macOS-only but was written on $(uname -s)" >&2
+		exit 1
+	fi
+	if grep -Fq "$flow_icons_sha" "$external_render"; then
+		echo "the Flow Icons external is macOS-only but rendered on $(uname -s)" >&2
+		exit 1
+	fi
+fi
 grep -Fq '"Flow Dim"' "$zed_settings"
-grep -Fq 'type = "archive"' "$external_render"
-grep -Fq 'f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7' \
-	"$external_render"
 if grep -Fq 'type = "git-repo"' "$external_render"; then
 	echo "Flow Icons external must not use a mutable git checkout" >&2
 	exit 1
