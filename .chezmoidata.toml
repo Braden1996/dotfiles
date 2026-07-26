@@ -18,6 +18,12 @@ identityScopeField = "scope"
 # written at runtime from the vault. Relative to $HOME.
 identityIncludeFile = ".config/git/identities.gitconfig"
 identityDir = ".config/git/identities"
+# An identity may own credentials on a SEPARATE GitHub account. The signal is
+# simply that `GitHub Machine Auth (<machine> <slug>)` exists in the vault --
+# `dotfiles-keys provision` creates it, `sync` detects it. SSH then needs a host
+# alias to choose between accounts, written here and pulled in by an Include
+# from the chezmoi-managed ~/.ssh/config.
+sshIncludeDir = ".ssh/config.d"
 # The private-key reference is not listed here: reading it requires a
 # `?ssh-format=openssh` query that only the loader understands, so the whole
 # reference lives with the code that uses it rather than being half-declared.

@@ -270,6 +270,7 @@ Usage: dotfiles-keys <command>
 
 Commands:
   setup         Guided first run: check prerequisites, then generate, publish, sync
+  provision     Create+publish keys for ANOTHER machine: provision <machine> <slug> [vault]
   store-token   Store the service account token in the macOS keychain (work only)
   status        Report the credential backend, agent, and which keys are usable
   generate      Create this machine's SSH keys inside 1Password
@@ -396,6 +397,17 @@ An identity is an email plus a rule for which repos it applies to. There is no f
   the bare and `.git` URL forms — a suffixless clone does not match a suffixed pattern, which
   silently drops the identity.
 - **Overlapping scopes: last match wins**, so identities are sorted by slug to stay deterministic.
+- **An identity may own a separate GitHub account.** If
+  `GitHub Machine Auth (<machine> <slug>)` exists in the vault, that identity
+  gets its own auth and signing keys, an ssh alias `github-<slug>`, and signs
+  with its own key — a key on one account cannot verify a commit authored under
+  another account's email. Clone those repos via the alias
+  (`git@github-personal:owner/repo.git`); `sync` matches both URL forms.
+- **`provision` creates those keys from a machine already logged into that
+  account**, so a work laptop never has to sign in to a personal GitHub:
+  ```bash
+  dotfiles-keys provision work-macbook personal 'Braden<>Work'
+  ```
 - `~/.gitconfig` carries one static include; `dotfiles-keys sync` writes the routing and the
   per-identity files. chezmoi never templates them — it only knows the machine it rendered on,
   and only the vault knows how many identities exist.

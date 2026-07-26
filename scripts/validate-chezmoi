@@ -173,6 +173,15 @@ ssh_config="$home_dir/.ssh/config"
 
 grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
 
+# Per-account host aliases are written at runtime by `dotfiles-keys sync`, so
+# chezmoi supplies only the Include. Templating them would need to know which
+# identities own credentials, which only the vault knows.
+grep -Fq 'Include ~/.ssh/config.d/*.conf' "$ssh_config"
+if cm managed | grep -Eq 'ssh/config\.d'; then
+	echo "per-account ssh blocks must not be managed by chezmoi" >&2
+	exit 1
+fi
+
 # Neither profile may pin an agent socket. The 1Password SSH agent asks approval
 # per client, which no unattended process can answer, so pinning it would stop
 # agent harnesses and CI from pushing or signing at all.

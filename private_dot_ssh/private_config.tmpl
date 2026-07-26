@@ -25,6 +25,13 @@ unsafe direction for exactly the profile this design protects.
 # harnesses and CI from pushing or signing. 1Password is the source of truth
 # for the key, not a gate on using it.
 
+{{/*
+Included first so a per-account alias wins: ssh takes the first value it sees
+for each keyword. These blocks are written by `dotfiles-keys sync` from the
+vault, because only it knows which identities own credentials.
+*/}}
+Include ~/.ssh/config.d/*.conf
+
 Host github.com
   HostName github.com
   User git
