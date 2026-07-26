@@ -47,7 +47,7 @@ recorded_auth_key="$(read_if_present "$HOME/.ssh/id_github_auth.pub")"
 recorded_sign_key="$(read_if_present "$HOME/.ssh/id_github_sign.pub")"
 personal_email={{ get . "personalEmail" | default "doctor@example.invalid" | quote }}
 service_account_token_file={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
-service_account_keychain={{ .credentials.serviceAccountKeychainService | quote }}
+service_account_keychain={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 
 ok_count=0
 warn_count=0
@@ -213,7 +213,7 @@ if [[ "$credential_backend" == "service-account" ]]; then
   # anything running as this user, whereas a keychain item is encrypted at rest
   # and gated by its own access control.
   if command -v security >/dev/null 2>&1 &&
-    security find-generic-password -s "$service_account_keychain" -a "$USER" >/dev/null 2>&1; then
+    security find-generic-password -s "$service_account_keychain" >/dev/null 2>&1; then
     pass "service account token is in the login keychain"
     if [[ -e "$service_account_token_file" ]]; then
       warn "a plaintext token also exists at $service_account_token_file; delete it"

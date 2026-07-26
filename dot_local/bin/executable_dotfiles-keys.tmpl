@@ -42,7 +42,7 @@ readonly TOKEN_ITEM={{ .credentials.tokenItem | quote }}
 readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
 readonly TOKEN_FIELD={{ .credentials.tokenField | quote }}
 readonly KEY_LIFETIME={{ .credentials.agentKeyLifetime | quote }}
-readonly KEYCHAIN_SERVICE={{ .credentials.serviceAccountKeychainService | quote }}
+readonly KEYCHAIN_SERVICE={{ get . "opTokenKeychainService" | default "dotfiles-op-service-account" | quote }}
 readonly TOKEN_FILE={{ joinPath .chezmoi.homeDir .credentials.serviceAccountTokenFile | quote }}
 readonly SSH_DIR={{ joinPath .chezmoi.homeDir ".ssh" | quote }}
 readonly ALLOWED_SIGNERS={{ joinPath .chezmoi.homeDir ".ssh/allowed_signers" | quote }}
@@ -134,7 +134,7 @@ service_account_token() {
   fi
   if command -v security >/dev/null 2>&1; then
     local from_keychain
-    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" -a "$USER" 2>/dev/null)"; then
+    if from_keychain="$(security find-generic-password -w -s "$KEYCHAIN_SERVICE" 2>/dev/null)"; then
       printf '%s' "$from_keychain"
       return 0
     fi
@@ -151,7 +151,7 @@ token_source() {
   if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
     printf 'environment'
   elif command -v security >/dev/null 2>&1 &&
-    security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$USER" >/dev/null 2>&1; then
+    security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
     printf 'keychain'
   elif [[ -r "$TOKEN_FILE" ]]; then
     printf 'file'
@@ -631,10 +631,14 @@ identity_rows() {
   ' <<<"$items" | sort -t"$(printf '\t')" -k2
 }
 
+# --reveal is required for fields stored as CONCEALED. New identities are
+# created as plain text below, but items made before that fix are concealed and
+# would otherwise read back as "[use 'op item get ...' to reveal]" -- which then
+# lands in the gitconfig as if it were an email address.
 identity_field() {
   local vault_id
   vault_id="$(resolve_vault_id)" || return 1
-  op_run item get "$1" --vault "$vault_id" --fields label="$2" 2>/dev/null
+  op_run item get "$1" --vault "$vault_id" --fields label="$2" --reveal 2>/dev/null
 }
 
 identity_emails() {
@@ -732,18 +736,42 @@ cmd_identity_add() {
     return 1
   fi
 
-  if op_run item create \
+  # [text] matters: without it op stores these as CONCEALED, and reading them
+  # back yields a placeholder rather than the value. Neither an email nor a
+  # repo glob is a secret.
+  local title="$IDENTITY_PREFIX ($slug)"
+  local existing
+  existing="$(resolve_item_id "$title" 2>/dev/null)"
+
+  if [[ -n "$existing" ]]; then
+    # Update rather than create: a second item with the same title makes every
+    # later lookup ambiguous and silently duplicates the routing rules.
+    if op_run item edit "$existing" \
+      --vault "$VAULT" \
+      "${IDENTITY_EMAIL_FIELD}[text]=$email" \
+      "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
+      pass "updated $title in $VAULT"
+    else
+      fail "could not update the existing identity item"
+      return 1
+    fi
+  elif op_run item create \
     --category "Secure Note" \
-    --title "$IDENTITY_PREFIX ($slug)" \
+    --title "$title" \
     --vault "$VAULT" \
-    "$IDENTITY_EMAIL_FIELD=$email" \
-    "$IDENTITY_SCOPE_FIELD=$scope" >/dev/null; then
-    pass "created $IDENTITY_PREFIX ($slug) in $VAULT"
-    cmd_sync_identities
+    "${IDENTITY_EMAIL_FIELD}[text]=$email" \
+    "${IDENTITY_SCOPE_FIELD}[text]=$scope" >/dev/null; then
+    pass "created $title in $VAULT"
   else
     fail "could not create the identity item"
     return 1
   fi
+
+  cmd_sync_identities || return 1
+  # The trust store lists one line per principal, and a new identity adds a
+  # principal. Skipping this would leave commits made under the new email
+  # unverifiable locally until the next unrelated sync.
+  cmd_sync_signers
 }
 
 # The vault is the only place that knows how many machines exist, so the trust
