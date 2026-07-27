@@ -517,7 +517,7 @@ if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
 	echo "Cursor's license key must not be invented on a new installation" >&2
 	exit 1
 fi
-cursor_mode="$(stat -f '%OLp' "$cursor_settings" 2>/dev/null || stat -c '%a' "$cursor_settings")"
+cursor_mode="$(stat -c '%a' "$cursor_settings" 2>/dev/null || stat -f '%OLp' "$cursor_settings")"
 if [[ "$cursor_mode" != 600 ]]; then
 	echo "Cursor settings containing a projected licence must be private" >&2
 	exit 1
