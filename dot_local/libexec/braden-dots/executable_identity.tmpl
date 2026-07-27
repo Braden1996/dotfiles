@@ -809,7 +809,9 @@ cmd_test() {
   for config_file in "$SSH_INCLUDE_DIR"/*.conf; do
     [[ -r "$config_file" ]] || continue
     alias_host="$(awk '$1 == "Host" { print $2; exit }' "$config_file")"
-    [[ -n "$alias_host" ]] && test_ssh_host "$alias_host" || status=1
+    if [[ -n "$alias_host" ]] && ! test_ssh_host "$alias_host"; then
+      status=1
+    fi
   done
   return "$status"
 }
@@ -1413,7 +1415,11 @@ cmd_provision() {
     else
       title="$(machine_item_title "$kind" "$machine")"
     fi
-    [[ "$kind" == auth ]] && key_type=authentication || key_type=signing
+    if [[ "$kind" == auth ]]; then
+      key_type=authentication
+    else
+      key_type=signing
+    fi
     publish_key_to_github "$title" "$vault" "$key_type" "$title" || {
       exit_code=1
       [[ "$kind" == sign ]] &&
