@@ -517,10 +517,12 @@ if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
 	echo "Cursor's license key must not be invented on a new installation" >&2
 	exit 1
 fi
-cursor_mode="$(stat -c '%a' "$cursor_settings" 2>/dev/null || stat -f '%OLp' "$cursor_settings")"
-if [[ "$cursor_mode" != 600 ]]; then
-	echo "Cursor settings containing a projected licence must be private" >&2
-	exit 1
+if [[ "$(uname -s)" == Darwin ]]; then
+	cursor_mode="$(stat -c '%a' "$cursor_settings" 2>/dev/null || stat -f '%OLp' "$cursor_settings")"
+	if [[ "$cursor_mode" != 600 ]]; then
+		echo "Cursor settings containing a projected licence must be private" >&2
+		exit 1
+	fi
 fi
 
 if command -v jq >/dev/null 2>&1; then
