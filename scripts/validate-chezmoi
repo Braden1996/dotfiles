@@ -582,14 +582,14 @@ cm execute-template --file "$repo_root/.chezmoiexternal.toml" >"$external_render
 if [[ "$(uname -s)" == Darwin ]]; then
 	[[ -x "$flow_command" ]]
 	[[ -x "$home_dir/.local/bin/dotfiles-flow-icons" ]]
+	grep -Fq 'f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7' \
+		"$external_render"
 else
 	[[ ! -e "$flow_command" ]]
 	[[ ! -e "$home_dir/.local/bin/dotfiles-flow-icons" ]]
 fi
 grep -Fq '"Flow Dim"' "$zed_settings"
 grep -Fq 'type = "archive"' "$external_render"
-grep -Fq 'f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7' \
-	"$external_render"
 if grep -Fq 'type = "git-repo"' "$external_render"; then
 	echo "Flow Icons external must not use a mutable git checkout" >&2
 	exit 1
