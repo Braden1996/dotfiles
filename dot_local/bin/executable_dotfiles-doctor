@@ -1,0 +1,4 @@
+#!/bin/bash
+printf '%s\n' \
+	'warning: dotfiles-doctor is deprecated; use braden-dots doctor' >&2
+exec "${BRADEN_DOTS_BIN:-$HOME/.local/bin/braden-dots}" doctor "$@"

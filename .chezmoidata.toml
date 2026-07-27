@@ -6,7 +6,7 @@
 # touching the others, and what makes a signature attributable to a machine.
 authItemPrefix = "GitHub Machine Auth"
 signItemPrefix = "GitHub Machine Sign"
-# Kept for backwards compatibility with `dotfiles-keys token` without an
+# Kept for backwards compatibility with `braden-dots identity token` without an
 # identity. New tokens are machine+identity scoped using tokenItemPrefix.
 tokenItem = "GitHub Machine PAT"
 tokenItemPrefix = "GitHub Machine PAT"
@@ -23,7 +23,7 @@ identityIncludeFile = ".config/git/identities.gitconfig"
 identityDir = ".config/git/identities"
 # An identity may own credentials on a SEPARATE GitHub account. The signal is
 # simply that `GitHub Machine Auth (<machine> <slug>)` exists in the vault --
-# `dotfiles-keys provision` creates it, `sync` detects it. SSH then needs a host
+# `braden-dots identity provision` creates it; identity sync detects it. SSH then needs a host
 # alias to choose between accounts, written here and pulled in by an Include
 # from the chezmoi-managed ~/.ssh/config.
 sshIncludeDir = ".ssh/config.d"
@@ -47,12 +47,21 @@ agentKeyLifetime = "9h"
 # Machine-local, never managed by chezmoi, never committed. Relative to $HOME.
 serviceAccountTokenFile = ".config/op/service-account-token"
 
+# The public source coordinates are deliberately non-secret. The SSH host is
+# selected at runtime from this machine's configured default GitHub login and
+# generated identity scopes.
+[dotfilesSource]
+owner = "Braden1996"
+repository = "dotfiles"
+primaryBranch = "master"
+
 [runtimeSecrets."flow-icons"]
-item = "Flow Icons Premium"
-field = "credential"
+item = "Flow Icons License"
+field = "license key"
+fieldId = "credential"
 profiles = ["personal", "work"]
 optional = true
-description = "Flow Icons premium licence"
+description = "Flow Icons licence"
 
 [flowIcons]
 revision = "0b7d8e039dd981a35475eb7b6d2093f412184627"

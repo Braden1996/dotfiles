@@ -1,0 +1,229 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+	cat <<'USAGE'
+Usage: braden-dots update [--check] [--refresh-antidote-pins]
+
+Without flags, safely sync and apply the Chezmoi source, upgrade only packages
+declared by the managed Brewfile, upgrade mise tools within their configured
+series, and update declared Cursor extensions. Existing source changes are
+preserved and never committed.
+
+  --check  Report machine health and available managed updates without changing
+           source, managed files, or installed versions.
+  --refresh-antidote-pins
+           Explicitly refresh pinned Antidote revisions. This changes source
+           state and is never done by default.
+USAGE
+}
+
+check_only=false
+refresh_antidote_pins=false
+while (($# > 0)); do
+	case "$1" in
+	--check) check_only=true ;;
+	--refresh-antidote-pins) refresh_antidote_pins=true ;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		printf 'Unknown option: %s\n' "$1" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
+	shift
+done
+
+if $check_only && $refresh_antidote_pins; then
+	printf '%s\n' '--check and --refresh-antidote-pins cannot be combined' >&2
+	exit 2
+fi
+
+readonly DOTS_BIN=${BRADEN_DOTS_BIN:-"$HOME/.local/bin/braden-dots"}
+readonly CHEZMOI_BIN=${BRADEN_DOTS_CHEZMOI:-chezmoi}
+readonly MISE_BIN=${BRADEN_DOTS_MISE:-mise}
+readonly BREWFILE="$HOME/.config/homebrew/Brewfile"
+readonly MISE_LOCK="$HOME/.config/mise/mise.lock"
+
+if [[ ! -x "$DOTS_BIN" ]]; then
+	printf 'braden-dots is missing or not executable: %s\n' "$DOTS_BIN" >&2
+	exit 1
+fi
+if ! command -v "$CHEZMOI_BIN" >/dev/null 2>&1; then
+	printf 'chezmoi is required\n' >&2
+	exit 1
+fi
+
+source_dir="$("$CHEZMOI_BIN" source-path)"
+
+if $check_only; then
+	status=0
+	"$DOTS_BIN" status || status=$?
+	printf '\nDeeper workstation checks\n'
+	"$DOTS_BIN" doctor || status=$?
+
+	if [[ "$(uname -s)" == Darwin ]] &&
+		command -v brew >/dev/null 2>&1 &&
+		[[ -r "$BREWFILE" ]]; then
+		export HOMEBREW_NO_ANALYTICS=1
+		export HOMEBREW_NO_AUTO_UPDATE=1
+		printf '\nOutdated managed Homebrew dependencies\n'
+		formulae="$(brew bundle list --file="$BREWFILE" --formula)"
+		casks="$(brew bundle list --file="$BREWFILE" --cask)"
+		if [[ -n "$formulae" ]]; then
+			# shellcheck disable=SC2086
+			brew outdated $formulae || true
+		fi
+		if [[ -n "$casks" ]]; then
+			# shellcheck disable=SC2086
+			brew outdated --cask $casks || true
+		fi
+	fi
+	if command -v "$MISE_BIN" >/dev/null 2>&1; then
+		printf '\nOutdated mise tools within configured series\n'
+		"$MISE_BIN" outdated -C "$HOME" || true
+	fi
+	exit "$status"
+fi
+
+source_snapshot() {
+	local source="$1" path
+	git -C "$source" status --porcelain=v1 --untracked-files=all
+	git -C "$source" diff --binary HEAD | git hash-object --stdin
+	while IFS= read -r path; do
+		[[ -n "$path" ]] || continue
+		printf 'untracked %s %s\n' \
+			"$(git -C "$source" hash-object -- "$path")" "$path"
+	done < <(git -C "$source" ls-files --others --exclude-standard)
+}
+
+source_file_hash() {
+	local source="$1" path="$2"
+	if [[ -f "$source/$path" ]]; then
+		git -C "$source" hash-object -- "$path"
+	else
+		printf '<missing>\n'
+	fi
+}
+
+pre_status="$(git -C "$source_dir" status --short)"
+pre_snapshot="$(source_snapshot "$source_dir")"
+pre_mise_lock="$(source_file_hash "$source_dir" dot_config/mise/mise.lock)"
+pre_antidote="$(source_file_hash "$source_dir" dot_zsh_plugins.txt)"
+
+if [[ -n "$pre_status" ]]; then
+	printf 'Chezmoi source already has local work; update will preserve it:\n'
+	printf '%s\n' "$pre_status" | sed 's/^/  /'
+fi
+
+"$DOTS_BIN" sync
+
+if $refresh_antidote_pins; then
+	antidote_manifest="$source_dir/dot_zsh_plugins.txt"
+	if [[ ! -r "$antidote_manifest" ]]; then
+		printf 'Antidote manifest is missing: %s\n' "$antidote_manifest" >&2
+		exit 1
+	fi
+
+	pin_tmp="$(mktemp "${TMPDIR:-/tmp}/braden-dots-antidote-pins.XXXXXX")"
+	trap 'rm -f -- "${pin_tmp:-}"' EXIT INT TERM
+	printf 'Refreshing explicitly pinned Antidote plugins...\n'
+	while IFS= read -r plugin_line || [[ -n "$plugin_line" ]]; do
+		case "$plugin_line" in
+		'' | '#'*)
+			printf '%s\n' "$plugin_line" >>"$pin_tmp"
+			continue
+			;;
+		esac
+
+		if [[ "$plugin_line" != *" pin:"* ]]; then
+			printf '%s\n' "$plugin_line" >>"$pin_tmp"
+			continue
+		fi
+
+		plugin_repo="${plugin_line%% *}"
+		plugin_sha="$(
+			git ls-remote "https://github.com/${plugin_repo}.git" HEAD |
+				awk 'NR == 1 { print $1 }'
+		)" || {
+			printf 'Failed to resolve Antidote plugin: %s\n' "$plugin_repo" >&2
+			exit 1
+		}
+		if [[ ! "$plugin_sha" =~ ^[0-9a-f]{40}$ ]]; then
+			printf 'Upstream returned an invalid commit for %s\n' "$plugin_repo" >&2
+			exit 1
+		fi
+		printf '%s\n' "$plugin_line" |
+			sed -E "s/pin:[0-9a-fA-F]{40}/pin:${plugin_sha}/" >>"$pin_tmp"
+	done <"$antidote_manifest"
+
+	if cmp -s "$antidote_manifest" "$pin_tmp"; then
+		printf 'Antidote pins are already current.\n'
+	else
+		mv -f "$pin_tmp" "$antidote_manifest"
+		printf 'Antidote pins refreshed in the Chezmoi source.\n'
+		"$DOTS_BIN" apply
+	fi
+	trap - EXIT INT TERM
+	rm -f -- "$pin_tmp"
+fi
+
+if [[ "$(uname -s)" == Darwin ]] &&
+	command -v brew >/dev/null 2>&1 &&
+	[[ -r "$BREWFILE" ]]; then
+	export HOMEBREW_NO_ANALYTICS=1
+	export HOMEBREW_REQUIRE_TAP_TRUST=1
+
+	while IFS= read -r tap_name; do
+		case "$tap_name" in
+		withgraphite/tap) ;;
+		*)
+			printf 'Refusing unreviewed Homebrew tap: %s\n' "$tap_name" >&2
+			exit 1
+			;;
+		esac
+	done < <(sed -nE 's/^[[:space:]]*tap[[:space:]]+"([^"]+)".*/\1/p' "$BREWFILE")
+
+	brew trust --tap withgraphite/tap
+	printf 'Updating Homebrew metadata and managed dependencies...\n'
+	brew update
+	brew bundle install --file="$BREWFILE"
+fi
+
+if command -v "$MISE_BIN" >/dev/null 2>&1; then
+	printf 'Upgrading mise tools within their configured version series...\n'
+	"$MISE_BIN" upgrade --yes -C "$HOME"
+	"$MISE_BIN" install --yes --locked -C "$HOME"
+	if [[ -r "$MISE_LOCK" ]]; then
+		"$CHEZMOI_BIN" re-add "$MISE_LOCK"
+	fi
+fi
+
+if command -v cursor >/dev/null 2>&1; then
+	printf 'Updating installed Cursor extensions...\n'
+	cursor --update-extensions
+fi
+
+"$DOTS_BIN" doctor
+
+post_snapshot="$(source_snapshot "$source_dir")"
+post_mise_lock="$(source_file_hash "$source_dir" dot_config/mise/mise.lock)"
+post_antidote="$(source_file_hash "$source_dir" dot_zsh_plugins.txt)"
+
+if [[ "$pre_mise_lock" != "$post_mise_lock" ]]; then
+	printf '\n[!!] update changed source file: dot_config/mise/mise.lock\n' >&2
+fi
+if [[ "$pre_antidote" != "$post_antidote" ]]; then
+	printf '\n[!!] update changed source file: dot_zsh_plugins.txt\n' >&2
+fi
+if [[ "$pre_snapshot" != "$post_snapshot" ]]; then
+	printf '\nSource state changed during update; nothing was committed:\n'
+	git -C "$source_dir" status --short
+	printf 'Review with: braden-dots source diff\n'
+	printf 'Publish when ready: braden-dots source publish -m "Update managed dotfiles state"\n'
+else
+	printf '\n[ok] update did not change the Chezmoi source\n'
+fi

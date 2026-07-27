@@ -1,17 +1,8 @@
-<p align="center">
-  <img src="assets/banner.webp" alt="Braden's Dotfiles" width="100%" />
-</p>
-
-<p align="center">
-  <a href="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml"><img src="https://github.com/Braden1996/dotfiles/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" /></a>
-  <a href="https://www.chezmoi.io/"><img src="https://img.shields.io/badge/managed%20with-chezmoi-2f80ed" alt="managed with chezmoi" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS" />
-  <img src="https://img.shields.io/badge/shell-zsh%20%2B%20fish-4eaa25" alt="zsh and fish" />
-</p>
+# Dotfiles
 
 My macOS workstation setup, managed with
-[chezmoi](https://www.chezmoi.io/). This is the rebuild and day-to-day cheat
-sheet.
+[chezmoi](https://www.chezmoi.io/). `braden-dots` is the stable control plane
+after the first apply; the raw Chezmoi command remains the bootstrap path.
 
 Private GitHub keys and application secrets live in 1Password. This repository
 contains configuration and non-secret coordinates, never secret values.
@@ -33,16 +24,17 @@ Extensions/plugins: [Cursor](dot_config/cursor/extensions.txt) 19 · [Zsh](dot_z
 
 Configured if already installed: Neovim/AstroNvim, Zed, OrbStack, Antigravity,
 Bun, Android SDK and Safe Chain. Flow Icons is configured for both profiles;
-Kimi/Grok integration is personal-only. Kimi, Grok, Zed and Neovim are not
+Kimi/Grok runtimes are personal-only. Kimi, Grok, Zed and Neovim are not
 installed here.
 
 - `personal` adds the 1Password app, personal macOS settings and personal tools.
-- `work` keeps the shared development stack and excludes Kimi/Grok integration.
-  Existing third-party installs are not removed.
+- `work` keeps the shared development stack and excludes Kimi/Grok runtime
+  configuration while retaining the shared agent guidance. Existing
+  third-party installs are not removed.
 
 ## New personal Mac
 
-1. Install Apple’s command-line tools: `xcode-select --install`
+1. Install Apple’s command-line tools: `xcode-select --install`.
 2. Bootstrap over HTTPS and choose `personal`:
 
    ```sh
@@ -52,69 +44,79 @@ installed here.
 
 3. Enable **1Password → Settings → Developer → Integrate with 1Password CLI**,
    then run `op signin` and `gh auth login`.
-4. Create, publish, sync and load this Mac’s keys: `dotfiles-keys setup`
-5. Optional: enable premium Flow Icons:
-   `dotfiles-secrets set flow-icons && dotfiles-flow-icons`
-6. Review, apply and verify:
-
-   ```sh
-   chezmoi diff && chezmoi apply
-   dotfiles-keys status
-   dotfiles-doctor
-   ssh -T git@github.com
-   ```
+4. Finish onboarding: `braden-dots init`.
 
 ## New work Mac
 
-1. On a trusted personal Mac, switch `gh` to the intended account and provision
-   keys and Flow Icons into the work-readable vault:
+1. On a trusted personal Mac, provision the intended account into the
+   work-readable vault. Ensure the same vault contains a `Flow Icons License`
+   item with a concealed `license key` field:
 
    ```sh
    gh auth switch -h github.com -u <github-login>
-   dotfiles-keys provision <machine> \
+   braden-dots identity provision <machine> \
      --vault '<work-vault-id>' \
      --github-user <github-login>
-   dotfiles-secrets set flow-icons --vault '<work-vault-id>'
    ```
 
 2. Install Apple’s command-line tools, run the bootstrap command above and
    choose `work`. Enter the same `<machine>` name used in step 1.
 3. Store the read-only 1Password service-account token:
-   `dotfiles-keys store-token`
-4. Sync and load the provisioned keys: `dotfiles-keys setup`
-5. Run `chezmoi diff && chezmoi apply`, then verify premium access with
-   `dotfiles-secrets status flow-icons && dotfiles-flow-icons` and complete the
-   personal-Mac verification commands.
+   `braden-dots identity store-token`.
+4. Finish onboarding: `braden-dots init`.
 
 For an additional GitHub account on a work Mac, see
 [GitHub credentials](docs/credentials.md).
 
-## Cheat sheet
+## Everyday workflow
+
+```sh
+braden-dots status
+braden-dots sync
+braden-dots update --check
+```
+
+Dirty Chezmoi source is normal: `sync` fetches for awareness, applies the local
+source as-is, and never stages, stashes, commits, or rewrites it.
+
+To save dotfiles work:
+
+```sh
+braden-dots source diff
+braden-dots source publish -m "Describe the dotfiles change"
+```
+
+If a rebase stops, resolve the listed files semantically and then continue, or
+abort to restore the pre-rebase commit:
+
+```sh
+braden-dots source conflicts
+braden-dots source continue
+# or
+braden-dots source abort
+```
+
+After a successful continuation, rerun `braden-dots source publish`.
+
+## Commands
 
 | Task | Command |
 | --- | --- |
-| Review and apply | `chezmoi diff && chezmoi apply` |
-| Open the source | `chezmoi cd` |
-| Re-run profile prompts | `chezmoi init --prompt` |
-| Set up machine keys | `dotfiles-keys setup` |
-| Inspect / load credentials | `dotfiles-keys status` · `dotfiles-keys load` |
-| Refresh keys and identities | `dotfiles-keys sync` |
-| Add an identity | `dotfiles-keys identity-add <slug> <email> '<owner/**>' [--vault <vault>]` |
-| Provision an account identity | `dotfiles-keys provision <machine> --identity <slug> --vault <vault> --github-user <login>` |
-| Run `gh` as an identity | `dotfiles-keys gh <slug> -- <arguments...>` |
-| Inspect application secrets | `dotfiles-secrets status` |
-| Store / rotate Flow Icons | `dotfiles-secrets set flow-icons && dotfiles-flow-icons` |
-| Check / apply updates | `dotfiles-update --check` · `dotfiles-update` |
-| Diagnose the machine | `dotfiles-doctor` |
-| Regenerate this inventory | `mise run docs` |
-| Validate before pushing | `mise run check` |
+| Finish onboarding | `braden-dots init` |
+| Apply local source | `braden-dots apply` |
+| Fetch safely and apply | `braden-dots sync` |
+| Commit, reconcile, check, push | `braden-dots source publish -m "…"` |
+| Check / apply updates | `braden-dots update --check` · `braden-dots update` |
+| Summarize machine state | `braden-dots status` |
+| Diagnose workstation/project | `braden-dots doctor [--project PATH]` |
 
 ## Credential model
 
-- 1Password is the source of truth; Chezmoi never fetches secrets while
-  rendering templates.
-- Private SSH keys are streamed into the OS agent. Only public keys, trust data
-  and generated Git routing are written locally.
+- Chezmoi owns configuration and the source used to generate managed targets.
+- 1Password owns secrets and private keys; Chezmoi never fetches them while
+  rendering.
+- Public keys, trust data, and Git/SSH identity files are generated local
+  projections. Private SSH keys are streamed only into the OS agent.
 - Personal Macs authenticate `op` through the desktop app.
 - Work Macs use a vault-scoped service account; loaded keys expire after nine
   hours.

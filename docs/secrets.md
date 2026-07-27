@@ -7,10 +7,10 @@ secret’s alias, item title, field and allowed profiles in
 ## Commands
 
 ```sh
-dotfiles-secrets list
-dotfiles-secrets status [alias]
-dotfiles-secrets read <alias>                 # secret only on stdout
-dotfiles-secrets set <alias> [--vault <vault>] \
+braden-dots secret list
+braden-dots secret status [alias]
+braden-dots secret read <alias>                 # secret only on stdout
+braden-dots secret set <alias> [--vault <vault>] \
   [--from-keychain <service>] [--account <account>]
 ```
 
@@ -21,7 +21,7 @@ managed files.
 Consumers should prefer a pipe:
 
 ```sh
-dotfiles-secrets read <alias> | consumer
+braden-dots secret read <alias> | consumer
 ```
 
 Use an environment variable or local file only when the consumer has no
@@ -34,41 +34,47 @@ Flow Icons is installed on both personal and work Macs. It uses premium icons
 when the current profile’s configured vault contains the optional licence,
 otherwise it installs the public set.
 
-Store a new value in the current machine’s vault with:
+Each machine vault should contain:
+
+- item: `Flow Icons License`
+- concealed field: `license key`
+
+Apply that vault’s value to every installed editor with:
 
 ```sh
-dotfiles-secrets set flow-icons
-dotfiles-flow-icons
+braden-dots secret status flow-icons
+braden-dots app flow-icons
 ```
 
-Migrate the old login-Keychain item without exposing the value:
+The operation updates only the Flow Icons setting:
+
+- VS Code and Cursor receive `flow-icons.licenseKey` in their local
+  `settings.json`. Existing JSONC comments and unrelated settings are
+  preserved, the setting is added to `settingsSync.ignoredSettings`, and the
+  file is written atomically with mode `0600`.
+- Zed’s pinned extension builder receives the licence through stdin. The key is
+  not stored in the generated extension.
+
+VS Code and Cursor require the key in editor settings, so those two projections
+are necessarily plaintext local copies. They remain outside the Chezmoi source,
+outside Settings Sync, and below the user-private `~/Library` tree. Zed does not
+persist the key.
+
+After rotating the item in 1Password, rerun:
 
 ```sh
-dotfiles-secrets set flow-icons \
-  --from-keychain flow-icons-zed-premium
-dotfiles-flow-icons
+braden-dots app flow-icons
 ```
 
-The migration deliberately leaves the Keychain copy in place for rollback.
-After verifying the Zed extension, remove that old item explicitly if wanted.
-
-Provision a separate work-readable vault from a trusted personal Mac:
-
-```sh
-dotfiles-secrets set flow-icons --vault '<work-vault-id>'
-# Or migrate the existing Keychain copy directly:
-dotfiles-secrets set flow-icons --vault '<work-vault-id>' \
-  --from-keychain flow-icons-zed-premium
-```
-
-Grant the work service account only view/read-item permission in 1Password.
-The helper also refuses `set` on service-account machines, so provisioning and
-rotation stay on a trusted desktop-authenticated Mac.
+`braden-dots secret set flow-icons` remains available for secure prompted entry.
+It creates or updates those same item coordinates without placing the value in
+shell history or process arguments. Work service accounts remain read-only, so
+create or rotate a work-vault item from a trusted desktop-authenticated Mac.
 
 Verify each work Mac can read its copy, then approve the upstream disclosure:
 
 ```sh
-dotfiles-secrets status flow-icons && dotfiles-flow-icons
+braden-dots secret status flow-icons && braden-dots app flow-icons
 ```
 
 The Zed updater:
@@ -80,12 +86,8 @@ The Zed updater:
 - builds in a staging directory and swaps only after success;
 - falls back to public icons when the optional licence is missing.
 
-Run `dotfiles-flow-icons --public` to avoid reading the licence.
-
-Cursor is different: its extension only accepts
-`flow-icons.licenseKey` in `settings.json`. On either profile, the managed
-settings preserve an existing local value and exclude it from Settings Sync,
-but do not project the 1Password value to disk.
+Run `braden-dots app flow-icons --public` to avoid reading the licence.
+The public path leaves any existing VS Code or Cursor licence setting untouched.
 
 ## Vaults and sharing
 
@@ -93,18 +95,18 @@ An item belongs to one 1Password vault. Give machines within the same trust
 boundary access to one vault rather than making copies. A work service account
 should only be able to read its work vault.
 
-Personal and work vaults are separate trust boundaries, so `set --vault`
-creates an independent Flow Icons copy. Future rotations must update each
-copy. Prefer a vault ID when similarly named vaults exist in multiple accounts.
-Vault permissions remain the real security boundary.
+Personal and work vaults are separate trust boundaries. Keep a `Flow Icons
+License` item in each intended machine vault, then update each copy during a
+rotation. Prefer a vault ID when similarly named vaults exist in multiple
+accounts. Vault permissions remain the real security boundary.
 
 ## Adding another secret
 
 1. Add non-secret coordinates and allowed profiles under `[runtimeSecrets]` in
    `.chezmoidata.toml`.
 2. Run `mise run check`.
-3. Store the value with `dotfiles-secrets set <alias>`.
-4. Pipe `dotfiles-secrets read <alias>` directly to its consumer.
+3. Store the value with `braden-dots secret set <alias>`.
+4. Pipe `braden-dots secret read <alias>` directly to its consumer.
 
 Do not call `onepasswordRead` from a Chezmoi template: status, diff and apply
 render templates and would unnecessarily materialise the secret.

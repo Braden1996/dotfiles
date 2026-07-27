@@ -1,3 +1,4 @@
+{{- /* braden-dots identity module. */ -}}
 {{- /* Derived from machineType, never from a persisted key that a stale
        machine-local config would be missing. See .chezmoi.toml.tmpl. */ -}}
 {{- $backend := ternary "service-account" "desktop" (eq (or (get . "machineType") "personal") "work") -}}
@@ -40,6 +41,8 @@ readonly IDENTITY_DIR={{ joinPath .chezmoi.homeDir .credentials.identityDir | qu
 readonly SSH_INCLUDE_DIR={{ joinPath .chezmoi.homeDir .credentials.sshIncludeDir | quote }}
 readonly GIT_NAME={{ .gitName | quote }}
 readonly DEFAULT_EMAIL={{ .defaultEmail | quote }}
+readonly DEFAULT_GITHUB_USER={{ get . "defaultGitHubUser" | default "" | quote }}
+readonly MACHINE_TYPE={{ .machineType | quote }}
 readonly TOKEN_ITEM={{ .credentials.tokenItem | quote }}
 readonly TOKEN_ITEM_PREFIX={{ .credentials.tokenItemPrefix | quote }}
 readonly PUBLIC_FIELD={{ .credentials.publicKeyField | quote }}
@@ -67,7 +70,7 @@ readonly PRIVATE_REFERENCE_SUFFIX='private key?ssh-format=openssh'
 
 usage() {
   cat <<'USAGE'
-Usage: dotfiles-keys <command>
+Usage: braden-dots identity <command>
 
 Commands:
   setup         Guided first run for this machine's credential backend
@@ -75,15 +78,18 @@ Commands:
                 provision <machine> [--identity <slug>] [--vault <vault>]
                                       [--github-user <login>]
   store-token   Store the service account token in the macOS keychain (work only)
-  status        Report the credential backend, agent, and which keys are usable
+  status [--repo PATH] [--json]
+                Report backend, agent, effective author, signing key and SSH route
+  ensure        Load managed keys only when the agent does not already hold them
+  test [--repo PATH]
+                Test configured GitHub SSH routes without changing them
   generate      Create this machine's SSH keys inside 1Password
   publish       Add this machine's public keys to your GitHub account
   sync          Write public keys, git identities and the trust store from the vault
   sync-signers  Rebuild only ~/.ssh/allowed_signers from every machine in the vault
-  identity-add  Add a git identity
-                identity-add <slug> <email> <owner/** | owner/repo>
+  add           Add a git identity
+                add <slug> <email> <owner/** | owner/repo>
                              [--vault <vault>]
-  load          Read this machine's keys from 1Password into the ssh-agent
   unload        Drop the loaded keys from the ssh-agent
   gh            Run gh with a verified, identity-scoped token
                 gh <slug> -- <gh arguments...>
@@ -134,7 +140,7 @@ token_file_is_safe() {
 
 require_vault() {
   if [[ -z "$VAULT" ]]; then
-    fail "no 1Password vault is configured; run: chezmoi init --prompt"
+    fail "no 1Password vault is configured; run: braden-dots config edit"
     return 1
   fi
 }
@@ -192,11 +198,11 @@ op_desktop() {
 op_run() {
   if [[ "$BACKEND" == "service-account" ]]; then
     local token
-    # Diagnostics stay on stderr: `dotfiles-keys token` is captured as $(...)
+    # Diagnostics stay on stderr: `braden-dots identity token` is captured as $(...)
     # by callers, and advice printed on stdout becomes the token.
     if ! token="$(service_account_token)"; then
       fail "no 1Password service account token found"
-      fail "Store one with: dotfiles-keys store-token"
+      fail "Store one with: braden-dots identity store-token"
       return 1
     fi
     token="${token//[$'\n\r\t ']/}"
@@ -332,7 +338,7 @@ agent_available() {
   [[ "$status" -ne 2 ]]
 }
 
-cmd_status() {
+cmd_status_human_base() {
   local exit_code=0
   require_safe_machine || exit_code=1
 
@@ -343,7 +349,7 @@ cmd_status() {
   if [[ -r "$ALLOWED_SIGNERS" ]]; then
     note "trusted signing keys: $(awk '{ print $2 " " $3 }' "$ALLOWED_SIGNERS" | sort -u | wc -l | tr -d ' ')"
   else
-    warn "no trust store yet; run: dotfiles-keys sync"
+    warn "no trust store yet; run: braden-dots identity sync"
   fi
 
   printf '\nTooling\n'
@@ -392,10 +398,10 @@ cmd_status() {
         local mode
         mode="$(file_mode "$TOKEN_FILE")"
         warn "service account token is a plaintext file (mode ${mode:-unknown})"
-        note "Prefer the keychain: dotfiles-keys store-token"
+        note "Prefer the keychain: braden-dots identity store-token"
         ;;
       *)
-        fail "no service account token found; run: dotfiles-keys store-token"
+        fail "no service account token found; run: braden-dots identity store-token"
         exit_code=1
         ;;
     esac
@@ -408,24 +414,24 @@ cmd_status() {
   if [[ -n "$auth_key" ]]; then
     pass "authentication public key is present"
   else
-    warn "no authentication public key; run: dotfiles-keys sync"
+    warn "no authentication public key; run: braden-dots identity sync"
   fi
   if [[ -n "$sign_key" ]]; then
     pass "signing public key is present"
   else
-    warn "no signing public key; run: dotfiles-keys sync"
+    warn "no signing public key; run: braden-dots identity sync"
   fi
 
   printf '\nKeys usable right now\n'
   if agent_holds_key "$auth_key"; then
     pass "the agent holds the authentication key"
   else
-    warn "the agent does not hold the authentication key; run: dotfiles-keys load"
+    warn "the agent does not hold the authentication key; run: braden-dots identity ensure"
   fi
   if agent_holds_key "$sign_key"; then
     pass "the agent holds the signing key"
   else
-    warn "the agent does not hold the signing key; run: dotfiles-keys load"
+    warn "the agent does not hold the signing key; run: braden-dots identity ensure"
   fi
 
   local account_auth_file account_sign_file account_slug account_auth_key account_sign_key
@@ -444,12 +450,12 @@ cmd_status() {
     if agent_holds_key "$account_auth_key"; then
       pass "the agent holds the '$account_slug' authentication key"
     else
-      warn "the agent does not hold the '$account_slug' authentication key; run: dotfiles-keys load"
+      warn "the agent does not hold the '$account_slug' authentication key; run: braden-dots identity ensure"
     fi
     if agent_holds_key "$account_sign_key"; then
       pass "the agent holds the '$account_slug' signing key"
     else
-      warn "the agent does not hold the '$account_slug' signing key; run: dotfiles-keys load"
+      warn "the agent does not hold the '$account_slug' signing key; run: braden-dots identity ensure"
     fi
   done
   for account_sign_file in "$SSH_DIR"/id_github_sign_*.pub; do
@@ -463,6 +469,374 @@ cmd_status() {
   done
 
   return "$exit_code"
+}
+
+managed_key_state() {
+  MANAGED_KEY_COUNT=0
+  MANAGED_KEY_LOADED_COUNT=0
+  DEFAULT_KEYS_PRESENT=1
+  local key_file public_key
+  for key_file in \
+    "$AUTH_KEY_FILE" \
+    "$SIGN_KEY_FILE" \
+    "$SSH_DIR"/id_github_auth_*.pub \
+    "$SSH_DIR"/id_github_sign_*.pub; do
+    [[ -e "$key_file" ]] || continue
+    public_key="$(recorded_key "$key_file")"
+    [[ -n "$public_key" ]] || continue
+    MANAGED_KEY_COUNT=$((MANAGED_KEY_COUNT + 1))
+    agent_holds_key "$public_key" &&
+      MANAGED_KEY_LOADED_COUNT=$((MANAGED_KEY_LOADED_COUNT + 1))
+  done
+  [[ -r "$AUTH_KEY_FILE" && -r "$SIGN_KEY_FILE" ]] || DEFAULT_KEYS_PRESENT=0
+
+  MANAGED_KEYS_LOADED=0
+  if ((DEFAULT_KEYS_PRESENT == 1 && MANAGED_KEY_COUNT >= 2 &&
+    MANAGED_KEY_COUNT == MANAGED_KEY_LOADED_COUNT)); then
+    MANAGED_KEYS_LOADED=1
+  fi
+}
+
+identity_remote_host() {
+  local url="$1"
+  case "$url" in
+    git@*:*/*)
+      url="${url#git@}"
+      printf '%s\n' "${url%%:*}"
+      ;;
+    ssh://git@*/*)
+      url="${url#ssh://git@}"
+      printf '%s\n' "${url%%/*}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+effective_repo_state() {
+  local repo="$1" remote_name
+  if ! git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fail "not a Git worktree: $repo"
+    return 1
+  fi
+  EFFECTIVE_REPO="$(unset CDPATH; cd -- "$repo" && pwd)"
+  EFFECTIVE_NAME="$(git -C "$repo" config --get user.name 2>/dev/null || true)"
+  EFFECTIVE_EMAIL="$(git -C "$repo" config --get user.email 2>/dev/null || true)"
+  EFFECTIVE_SIGNING_KEY="$(git -C "$repo" config --get user.signingkey 2>/dev/null || true)"
+  remote_name="$(
+    git -C "$repo" remote 2>/dev/null | awk 'NR == 1 { print; exit }'
+  )"
+  [[ -n "$(git -C "$repo" remote 2>/dev/null | awk '$0 == "origin"')" ]] &&
+    remote_name=origin
+  EFFECTIVE_REMOTE="$(
+    [[ -n "$remote_name" ]] &&
+      git -C "$repo" remote get-url "$remote_name" 2>/dev/null || true
+  )"
+  EFFECTIVE_HOST="$(identity_remote_host "$EFFECTIVE_REMOTE" 2>/dev/null || true)"
+
+  local signing_name slug
+  signing_name="${EFFECTIVE_SIGNING_KEY##*/}"
+  case "$signing_name" in
+    id_github_sign_*.pub)
+      slug="${signing_name#id_github_sign_}"
+      slug="${slug%.pub}"
+      EFFECTIVE_EXPECTED_HOST="github-$slug"
+      ;;
+    *) EFFECTIVE_EXPECTED_HOST=github.com ;;
+  esac
+}
+
+parse_status_options() {
+  IDENTITY_STATUS_JSON=0
+  IDENTITY_STATUS_REPO=""
+  while (($# > 0)); do
+    case "$1" in
+      --json)
+        IDENTITY_STATUS_JSON=1
+        shift
+        ;;
+      --repo)
+        if (($# < 2)) || [[ -z "$2" ]]; then
+          fail "--repo requires a path"
+          return 2
+        fi
+        IDENTITY_STATUS_REPO="$2"
+        shift 2
+        ;;
+      --repo=*)
+        IDENTITY_STATUS_REPO="${1#*=}"
+        shift
+        ;;
+      -h | --help)
+        usage
+        return 64
+        ;;
+      *)
+        fail "unknown identity status option: $1"
+        return 2
+        ;;
+    esac
+  done
+}
+
+identity_status_issues() {
+  local issues=()
+  managed_key_state
+  if ! agent_available || ((MANAGED_KEYS_LOADED == 0)); then
+    issues+=("agent_keys_missing")
+  fi
+  [[ -n "$DEFAULT_GITHUB_USER" ]] || issues+=("default_github_user_missing")
+  if [[ -n "$IDENTITY_STATUS_REPO" ]]; then
+    effective_repo_state "$IDENTITY_STATUS_REPO" || return 1
+    if [[ -z "$EFFECTIVE_HOST" ]] ||
+      [[ "$EFFECTIVE_HOST" != "$EFFECTIVE_EXPECTED_HOST" ]]; then
+      issues+=("remote_identity_mismatch")
+    fi
+  fi
+  printf '%s\n' "${issues[@]+"${issues[@]}"}"
+}
+
+cmd_status_json() {
+  require_command jq || return 1
+  local reachable=0 issues_json effective_json=null
+  agent_available && reachable=1
+  managed_key_state
+  issues_json="$(
+    identity_status_issues | awk 'NF' |
+      jq -Rsc 'split("\n") | map(select(length > 0))'
+  )" || return 1
+
+  if [[ -n "$IDENTITY_STATUS_REPO" ]]; then
+    effective_repo_state "$IDENTITY_STATUS_REPO" || return 1
+    effective_json="$(
+      jq -n \
+        --arg path "$EFFECTIVE_REPO" \
+        --arg name "$EFFECTIVE_NAME" \
+        --arg email "$EFFECTIVE_EMAIL" \
+        --arg signingKey "$EFFECTIVE_SIGNING_KEY" \
+        --arg remote "$EFFECTIVE_REMOTE" \
+        --arg sshHost "$EFFECTIVE_HOST" \
+        --arg expectedSshHost "$EFFECTIVE_EXPECTED_HOST" '
+          {
+            path: $path,
+            author: {
+              name: (if $name == "" then null else $name end),
+              email: (if $email == "" then null else $email end)
+            },
+            signingKey: (if $signingKey == "" then null else $signingKey end),
+            remote: (if $remote == "" then null else $remote end),
+            sshHost: (if $sshHost == "" then null else $sshHost end),
+            expectedSshHost: $expectedSshHost
+          }
+        '
+    )"
+  fi
+
+  jq -n \
+    --arg profile "$MACHINE_TYPE" \
+    --arg machine "$MACHINE" \
+    --arg backend "$BACKEND" \
+    --arg defaultGitHubUser "$DEFAULT_GITHUB_USER" \
+    --arg keyLifetime "$KEY_LIFETIME" \
+    --argjson agentReachable "$reachable" \
+    --argjson managedKeyCount "$MANAGED_KEY_COUNT" \
+    --argjson loadedKeyCount "$MANAGED_KEY_LOADED_COUNT" \
+    --argjson managedKeysLoaded "$MANAGED_KEYS_LOADED" \
+    --argjson effective "$effective_json" \
+    --argjson issues "$issues_json" '
+      {
+        schemaVersion: 1,
+        machine: {
+          name: $machine,
+          profile: $profile
+        },
+        credentials: {
+          backend: $backend,
+          defaultGitHubUser: (
+            if $defaultGitHubUser == "" then null else $defaultGitHubUser end
+          ),
+          sshAgentReachable: ($agentReachable == 1),
+          managedKeyCount: $managedKeyCount,
+          loadedKeyCount: $loadedKeyCount,
+          managedKeysLoaded: ($managedKeysLoaded == 1),
+          workKeyLifetime: (
+            if $backend == "service-account" then $keyLifetime else null end
+          )
+        },
+        effectiveRepository: $effective,
+        issues: $issues
+      }
+    '
+}
+
+cmd_status_human() {
+  local status=0
+  cmd_status_human_base || status=$?
+  note "configured github.com login: ${DEFAULT_GITHUB_USER:-<unset>}"
+  if [[ "$BACKEND" == service-account ]]; then
+    note "managed keys expire from the agent after $KEY_LIFETIME"
+  fi
+  note "public .pub files are expected to be readable; private keys exist only in the agent"
+
+  if [[ -n "$IDENTITY_STATUS_REPO" ]]; then
+    printf '\nEffective repository identity\n'
+    if effective_repo_state "$IDENTITY_STATUS_REPO"; then
+      note "repository:  $EFFECTIVE_REPO"
+      note "author:      ${EFFECTIVE_NAME:-<unset>} <${EFFECTIVE_EMAIL:-unset}>"
+      note "signing key: ${EFFECTIVE_SIGNING_KEY:-<unset>}"
+      note "remote:      ${EFFECTIVE_REMOTE:-<unset>}"
+      note "SSH route:   ${EFFECTIVE_HOST:-<not SSH>} (expected $EFFECTIVE_EXPECTED_HOST)"
+      if [[ -z "$EFFECTIVE_HOST" ]] ||
+        [[ "$EFFECTIVE_HOST" != "$EFFECTIVE_EXPECTED_HOST" ]]; then
+        warn "repository remote does not use its generated identity route"
+        status=1
+      fi
+    else
+      status=1
+    fi
+  fi
+  return "$status"
+}
+
+cmd_status() {
+  parse_status_options "$@"
+  local parse_status=$?
+  [[ "$parse_status" -eq 0 ]] || {
+    [[ "$parse_status" -eq 64 ]] && return 0
+    return "$parse_status"
+  }
+  if ((IDENTITY_STATUS_JSON == 1)); then
+    cmd_status_json
+  else
+    cmd_status_human
+  fi
+}
+
+cmd_ensure() {
+  require_safe_machine || return 1
+  if ! agent_available; then
+    fail "no ssh-agent is reachable; cannot ensure managed keys"
+    return 1
+  fi
+
+  managed_key_state
+  if ((DEFAULT_KEYS_PRESENT == 0)); then
+    note "managed public projections are missing; refreshing them from 1Password"
+    cmd_sync || return 1
+    managed_key_state
+  fi
+  if ((MANAGED_KEYS_LOADED == 1)); then
+    pass "all $MANAGED_KEY_COUNT managed key(s) are already loaded"
+    return 0
+  fi
+
+  if [[ "$BACKEND" == service-account ]]; then
+    note "reloading managed keys with the $KEY_LIFETIME work-machine lifetime"
+  else
+    note "loading missing managed keys into the ssh-agent"
+  fi
+  cmd_load || return 1
+  managed_key_state
+  if ((MANAGED_KEYS_LOADED == 0)); then
+    fail "one or more managed keys are still missing from the ssh-agent"
+    return 1
+  fi
+  pass "all $MANAGED_KEY_COUNT managed key(s) are loaded"
+}
+
+test_ssh_host() {
+  local host="$1" output user
+  output="$(ssh -o BatchMode=yes -o ConnectTimeout=6 -T "git@$host" 2>&1)" || true
+  user="$(sed -nE 's/.*Hi ([^!]+)!.*/\1/p' <<<"$output" | head -n 1)"
+  if [[ -n "$user" ]]; then
+    pass "$host authenticates as $user"
+    return 0
+  fi
+  fail "$host did not authenticate to GitHub"
+  return 1
+}
+
+cmd_test() {
+  local repo="" status=0 host remote
+  while (($# > 0)); do
+    case "$1" in
+      --repo)
+        (($# >= 2)) || {
+          fail "--repo requires a path"
+          return 2
+        }
+        repo="$2"
+        shift 2
+        ;;
+      --repo=*)
+        repo="${1#*=}"
+        shift
+        ;;
+      -h | --help)
+        note "usage: braden-dots identity test [--repo PATH]"
+        return 0
+        ;;
+      *)
+        fail "unknown identity test option: $1"
+        return 2
+        ;;
+    esac
+  done
+  require_command ssh || return 1
+  cmd_ensure || return 1
+
+  if [[ -n "$repo" ]]; then
+    effective_repo_state "$repo" || return 1
+    host="$EFFECTIVE_HOST"
+    remote="$EFFECTIVE_REMOTE"
+    if [[ -z "$host" ]]; then
+      fail "repository remote is not SSH; do not use HTTPS to bypass identity routing"
+      return 1
+    fi
+    test_ssh_host "$host" || status=1
+    if ! git -C "$repo" ls-remote "$remote" HEAD >/dev/null 2>&1; then
+      fail "repository access failed through $host"
+      note "An organisation may require SAML SSO. Request confirmation before authorizing it."
+      status=1
+    else
+      pass "repository is readable through $host"
+    fi
+    return "$status"
+  fi
+
+  test_ssh_host github.com || status=1
+  local config_file alias_host
+  for config_file in "$SSH_INCLUDE_DIR"/*.conf; do
+    [[ -r "$config_file" ]] || continue
+    alias_host="$(awk '$1 == "Host" { print $2; exit }' "$config_file")"
+    [[ -n "$alias_host" ]] && test_ssh_host "$alias_host" || status=1
+  done
+  return "$status"
+}
+
+require_configured_github_user() {
+  if [[ -z "$DEFAULT_GITHUB_USER" ]]; then
+    fail "defaultGitHubUser is not configured for this machine"
+    note "Run: braden-dots config edit"
+    return 1
+  fi
+}
+
+require_active_default_github_user() {
+  require_configured_github_user || return 1
+  local actual normalized_actual normalized_expected
+  actual="$(gh api user --jq .login 2>/dev/null || true)"
+  if [[ -z "$actual" ]]; then
+    fail "could not identify the active GitHub account"
+    return 1
+  fi
+  normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual")"
+  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$DEFAULT_GITHUB_USER")"
+  if [[ "$normalized_actual" != "$normalized_expected" ]]; then
+    fail "active GitHub account is '$actual', but github.com is configured for '$DEFAULT_GITHUB_USER'"
+    note "Switch explicitly with: gh auth switch -h github.com -u $DEFAULT_GITHUB_USER"
+    return 1
+  fi
+  pass "active GitHub account matches the configured default: $actual"
 }
 
 # Everything `setup` needs before it starts changing anything. Each failure
@@ -515,7 +889,7 @@ setup_preflight() {
       fi
       note "Binary in use: $(command -v op 2>/dev/null || echo 'op not found')"
     else
-      note "Store the service account token with: dotfiles-keys store-token"
+      note "Store the service account token with: braden-dots identity store-token"
     fi
     return 1
   fi
@@ -535,6 +909,7 @@ setup_preflight() {
       return 1
     fi
     pass "gh is authenticated"
+    require_active_default_github_user || return 1
 
     # Without this scope `publish` gets half way: the auth key lands on GitHub
     # and the signing key does not. Offer to fix it before creating anything.
@@ -565,6 +940,7 @@ setup_preflight() {
 
 # The whole first-run flow in the right order, so nobody has to remember it.
 cmd_setup() {
+  require_configured_github_user || return 1
   printf 'Checking prerequisites\n'
   setup_preflight || return 1
 
@@ -587,20 +963,16 @@ cmd_setup() {
 
   cat <<'DONE'
 
-Done. One step left, because it changes managed files:
+Credential setup is complete. `braden-dots init` will apply the managed files,
+configure the source origin, and run the workstation doctor. When running this
+specialist command directly, continue with:
 
-  chezmoi diff        # review, this machine may have unrelated pending changes
-  chezmoi apply       # picks up the new key files for Git and SSH
+  braden-dots apply
+  braden-dots identity status
+  braden-dots identity test
 
-Then check it worked:
-
-  dotfiles-keys status
-  ssh -T git@github.com
-
-Nothing else needs adding to the vault by hand. The only optional extra is a
-GitHub token for `gh` on machines that cannot log in interactively. See
-docs/credentials.md in the Chezmoi source; GitHub does not allow creating one
-via API.
+GitHub tokens remain an explicit advanced operation; they are not required for
+routine onboarding.
 DONE
 }
 
@@ -696,7 +1068,7 @@ cmd_generate() {
     ensure_ssh_item "$item" "$VAULT" || return 1
   done
 
-  note "Next: dotfiles-keys publish, then dotfiles-keys sync"
+    note "Next: braden-dots identity publish, then braden-dots identity sync"
 }
 
 cmd_publish() {
@@ -707,13 +1079,14 @@ cmd_publish() {
 
   if [[ "$BACKEND" == "service-account" ]]; then
     fail "refusing to publish keys from a service-account machine"
-    note "Publish with 'dotfiles-keys provision' from a trusted personal machine."
+    note "Publish with 'braden-dots identity provision' from a trusted personal machine."
     return 1
   fi
   if ! gh auth status >/dev/null 2>&1; then
     fail "gh is not authenticated; run: gh auth login"
     return 1
   fi
+  require_active_default_github_user || return 1
 
   local hostname
   hostname="$(uname -n)"
@@ -762,9 +1135,9 @@ cmd_sync() {
     note "Expected items: '$AUTH_ITEM' and '$SIGN_ITEM'."
     if [[ "$BACKEND" == "service-account" ]]; then
       note "Provision the default pair from a desktop-authenticated machine."
-      note "Run: dotfiles-keys provision $MACHINE --vault '$VAULT'"
+      note "Run: braden-dots identity provision $MACHINE --vault '$VAULT'"
     else
-      note "Run 'dotfiles-keys generate' on this machine first."
+      note "Run 'braden-dots identity generate' on this machine first."
     fi
     return 1
   fi
@@ -833,7 +1206,7 @@ require_safe_machine() {
   if ! valid_slug "$MACHINE"; then
     fail "configured machine name '$MACHINE' is unsafe for key item titles"
     note "Use letters, numbers, dot, underscore and hyphen, starting with a"
-    note "letter or number. Fix it with: chezmoi init --prompt"
+    note "letter or number. Fix it with: braden-dots config edit"
     return 1
   fi
 }
@@ -897,12 +1270,12 @@ cmd_provision() {
 
   case "${1:-}" in
     -h | --help)
-      note "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+      note "usage: braden-dots identity provision <machine> [--identity <slug>]"
       note "       [--vault <vault>] [--github-user <login>]"
       return 0
       ;;
     "")
-      fail "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+      fail "usage: braden-dots identity provision <machine> [--identity <slug>]"
       note "       [--vault <vault>] [--github-user <login>]"
       return 2
       ;;
@@ -947,7 +1320,7 @@ cmd_provision() {
         shift 2
         ;;
       -h | --help)
-        note "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+        note "usage: braden-dots identity provision <machine> [--identity <slug>]"
         note "       [--vault <vault>] [--github-user <login>]"
         return 0
         ;;
@@ -974,7 +1347,7 @@ cmd_provision() {
   done
 
   if [[ -z "$machine" || -z "$vault" ]]; then
-    fail "usage: dotfiles-keys provision <machine> [--identity <slug>]"
+    fail "usage: braden-dots identity provision <machine> [--identity <slug>]"
     note "       [--vault <vault>] [--github-user <login>]"
     return 1
   fi
@@ -1049,7 +1422,7 @@ cmd_provision() {
   done
 
   if [[ "$exit_code" -eq 0 ]]; then
-    note "On $machine, run: dotfiles-keys sync && dotfiles-keys load"
+    note "On $machine, run: braden-dots identity sync && braden-dots identity ensure"
   fi
   return "$exit_code"
 }
@@ -1074,7 +1447,7 @@ cmd_sync_identities() {
   mkdir -p "$staged_identity_dir" "$staged_ssh_dir/config.d"
 
   {
-    printf '# Generated by dotfiles-keys sync. Edits are lost.\n'
+    printf '# Generated by braden-dots identity sync. Edits are lost.\n'
     printf '# Identities come from the 1Password vault: %s\n\n' "$VAULT"
   } >"$staged_include"
 
@@ -1138,7 +1511,7 @@ cmd_sync_identities() {
       printf '%s\n' "$sign_key" >"$staged_ssh_dir/id_github_sign_$slug.pub"
       chmod 644 "$staged_ssh_dir/id_github_auth_$slug.pub" "$staged_ssh_dir/id_github_sign_$slug.pub"
       cat >"$staged_ssh_dir/config.d/10-$slug.conf" <<SSHCONF
-# Generated by dotfiles-keys sync. Edits are lost.
+# Generated by braden-dots identity sync. Edits are lost.
 Host $alias_host
   HostName github.com
   User git
@@ -1204,7 +1577,7 @@ cmd_identity_add() {
 
   case "${1:-}" in
     -h | --help)
-      note "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+      note "usage: braden-dots identity add <slug> <email> <owner/** | owner/repo>"
       note "       [--vault <vault>]"
       return 0
       ;;
@@ -1229,7 +1602,7 @@ cmd_identity_add() {
         shift 2
         ;;
       -h | --help)
-        note "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+        note "usage: braden-dots identity add <slug> <email> <owner/** | owner/repo>"
         note "       [--vault <vault>]"
         return 0
         ;;
@@ -1241,12 +1614,12 @@ cmd_identity_add() {
   done
 
   if [[ -z "$slug" || -z "$email" || -z "$scope" ]]; then
-    fail "usage: dotfiles-keys identity-add <slug> <email> <owner/** | owner/repo>"
+    fail "usage: braden-dots identity add <slug> <email> <owner/** | owner/repo>"
     note "       [--vault <vault>]"
     return 1
   fi
   if [[ -z "$vault" ]]; then
-    fail "no target vault; pass --vault or run: chezmoi init --prompt"
+    fail "no target vault; pass --vault or run: braden-dots config edit"
     return 1
   fi
   if ! valid_slug "$slug"; then
@@ -1330,7 +1703,7 @@ cmd_identity_add() {
     cmd_sync_signers
   else
     note "Identity stored for another vault; local routing was left unchanged."
-    note "On machines using $vault, run: dotfiles-keys sync"
+    note "On machines using $vault, run: braden-dots identity sync"
   fi
 }
 
@@ -1381,7 +1754,7 @@ cmd_sync_signers() {
 
   if [[ -z "$rows" ]]; then
     fail "no items named '$SIGN_ITEM_PREFIX (...)' are readable"
-    note "Run 'dotfiles-keys generate' on at least one machine first."
+    note "Run 'braden-dots identity generate' on at least one machine first."
     return 1
   fi
 
@@ -1635,7 +2008,7 @@ cmd_unload() {
   if (( removed > 0 )); then
     pass "removed $removed key(s) from the agent"
   elif (( recorded == 0 )); then
-    warn "no public keys are recorded, so nothing could be matched; run: dotfiles-keys sync"
+    warn "no public keys are recorded, so nothing could be matched; run: braden-dots identity sync"
   else
     note "no managed keys were loaded"
   fi
@@ -1662,7 +2035,7 @@ cmd_store_token() {
     -a "$KEYCHAIN_ACCOUNT" \
     -s "$KEYCHAIN_SERVICE" \
     -D "1Password service account token" \
-    -j "Used by dotfiles-keys on this work machine" \
+    -j "Used by braden-dots on this work machine" \
     -w; then
     pass "stored the token in the login keychain as '$KEYCHAIN_SERVICE'"
   else
@@ -1673,7 +2046,7 @@ cmd_store_token() {
   if [[ -e "$TOKEN_FILE" ]]; then
     warn "a plaintext token still exists at $TOKEN_FILE"
     note "The keychain now takes precedence. Delete the file once you have"
-    note "confirmed 'dotfiles-keys status' works."
+    note "confirmed 'braden-dots identity status' works."
   fi
 }
 
@@ -1732,7 +2105,7 @@ cmd_token() {
     1)
       case "$1" in
         -h | --help)
-          note "usage: dotfiles-keys token [<slug>]"
+          note "usage: braden-dots identity token [<slug>]"
           return 0
           ;;
         -*)
@@ -1743,7 +2116,7 @@ cmd_token() {
       esac
       ;;
     *)
-      fail "usage: dotfiles-keys token [<slug>]"
+      fail "usage: braden-dots identity token [<slug>]"
       return 2
       ;;
   esac
@@ -1767,11 +2140,11 @@ cmd_token() {
 cmd_gh() {
   case "${1:-}" in
     -h | --help)
-      note "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+      note "usage: braden-dots identity gh <slug> -- <gh arguments...>"
       return 0
       ;;
     "")
-      fail "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+      fail "usage: braden-dots identity gh <slug> -- <gh arguments...>"
       return 2
       ;;
     -*)
@@ -1788,8 +2161,8 @@ cmd_gh() {
     return 2
   fi
   if [[ "${1:-}" != "--" ]]; then
-    fail "separate dotfiles-keys and gh arguments with --"
-    fail "usage: dotfiles-keys gh <slug> -- <gh arguments...>"
+    fail "separate braden-dots and gh arguments with --"
+    fail "usage: braden-dots identity gh <slug> -- <gh arguments...>"
     return 2
   fi
   shift
@@ -1832,33 +2205,24 @@ cmd_gh() {
 
 main() {
   local command="${1:-status}"
+  [[ $# -gt 0 ]] && shift
   case "$command" in
-    setup) cmd_setup ;;
-    provision)
-      shift
-      cmd_provision "$@"
-      ;;
+    setup) cmd_setup "$@" ;;
+    provision) cmd_provision "$@" ;;
     store-token) cmd_store_token ;;
-    status) cmd_status ;;
-    generate) cmd_generate ;;
-    publish) cmd_publish ;;
-    sync) cmd_sync ;;
+    status) cmd_status "$@" ;;
+    ensure) cmd_ensure "$@" ;;
+    test) cmd_test "$@" ;;
+    generate) cmd_generate "$@" ;;
+    publish) cmd_publish "$@" ;;
+    sync) cmd_sync "$@" ;;
     sync-identities) cmd_sync_identities ;;
-    identity-add)
-      shift
-      cmd_identity_add "$@"
-      ;;
+    add | identity-add) cmd_identity_add "$@" ;;
     sync-signers) cmd_sync_signers ;;
     load) cmd_load ;;
     unload) cmd_unload ;;
-    gh)
-      shift
-      cmd_gh "$@"
-      ;;
-    token)
-      shift
-      cmd_token "$@"
-      ;;
+    gh) cmd_gh "$@" ;;
+    token) cmd_token "$@" ;;
     -h | --help | help) usage ;;
     *)
       fail "unknown command: $command"

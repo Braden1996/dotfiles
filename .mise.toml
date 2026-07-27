@@ -33,17 +33,21 @@ run = [
   "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/validate-chezmoi work",
 ]
 
-[tasks."check:keys"]
-description = "Exercise dotfiles-keys against isolated 1Password, GitHub, and agent fakes"
-run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-dotfiles-keys"
+[tasks."check:braden-dots"]
+description = "Exercise facade, source histories, JSON, shims, sync, publish, and update safety"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots"
+
+[tasks."check:identity"]
+description = "Exercise braden-dots identity against isolated 1Password, GitHub, and agent fakes"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-identity"
 
 [tasks."check:flow-icons"]
 description = "Exercise staged Flow Icons updates with a fixture licence"
-run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-flow-icons"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-flow-icons"
 
-[tasks."check:runtime-secrets"]
-description = "Exercise dotfiles-secrets without exposing fixture values"
-run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-dotfiles-secrets"
+[tasks."check:secret"]
+description = "Exercise braden-dots secret without exposing fixture values"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-secret"
 
 [tasks.docs]
 description = "Regenerate the README inventory from its sources of truth"
@@ -63,8 +67,8 @@ run = [
 [tasks."check:scripts"]
 description = "Lint repository validation scripts"
 run = [
-  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys scripts/test-dotfiles-secrets scripts/test-flow-icons",
-  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-dotfiles-keys scripts/test-dotfiles-secrets scripts/test-flow-icons",
+  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons",
+  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons",
 ]
 
 [tasks."check:secrets"]
@@ -76,7 +80,7 @@ run = [
 
 [tasks."check:static"]
 description = "Run fast, platform-independent checks"
-depends = ["check:actions", "check:data", "check:docs", "check:flow-icons", "check:keys", "check:runtime-secrets", "check:lua", "check:scripts", "check:secrets"]
+depends = ["check:actions", "check:braden-dots", "check:data", "check:docs", "check:flow-icons", "check:identity", "check:secret", "check:lua", "check:scripts", "check:secrets"]
 
 [tasks.check]
 description = "Run the complete local validation suite"

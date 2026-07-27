@@ -1,9 +1,10 @@
 #!/bin/bash
+# braden-dots doctor module.
 set -uo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: dotfiles-doctor [--project PATH]
+Usage: braden-dots doctor [--project PATH]
 
 Run workstation checks without changing managed state. With --project, also
 inspect an Nx workspace's telemetry choice and .cursorignore coverage.
@@ -37,7 +38,8 @@ done
 
 credential_backend={{ ternary "service-account" "desktop" (eq (get . "machineType" | default "personal") "work") | quote }}
 credential_vault={{ get . "opVault" | default "" | quote }}
-# Public keys live on disk, written from the vault by `dotfiles-keys sync`.
+default_github_user={{ get . "defaultGitHubUser" | default "" | quote }}
+# Public keys live on disk, written from the vault by `braden-dots identity sync`.
 read_if_present() {
   if [[ -r "$1" ]]; then
     cat "$1"
@@ -123,11 +125,11 @@ check_agent_key() {
   local key="$2"
 
   if [[ -z "$key" ]]; then
-    warn "$label public key is missing from ~/.ssh; run: dotfiles-keys sync"
+    warn "$label public key is missing from ~/.ssh; run: braden-dots identity sync"
   elif agent_holds_key "$key"; then
     pass "$label key is held by the ssh-agent"
   else
-    warn "$label key is not loaded; run: dotfiles-keys load"
+    warn "$label key is not loaded; run: braden-dots identity ensure"
   fi
 }
 
@@ -185,6 +187,11 @@ check_optional_command safe-chain
 
 printf '\nGitHub credentials\n'
 note "backend: $credential_backend, vault: ${credential_vault:-<unset>}"
+if [[ -n "$default_github_user" ]]; then
+  pass "github.com is configured for $default_github_user"
+else
+  fail "defaultGitHubUser is missing; run: braden-dots config edit"
+fi
 check_optional_command op
 
 # Exit status 2 means the agent could not be contacted; 1 only means it is
@@ -199,14 +206,14 @@ else
 fi
 
 # gitconfig points gpg.ssh.allowedSignersFile here, but chezmoi does not write
-# it: only the vault knows every machine's signing key, so `dotfiles-keys
+# it: only the vault knows every machine's signing key, so `braden-dots identity
 # sync-signers` owns it. Without it, verification fails for every commit.
 allowed_signers_file="$HOME/.ssh/allowed_signers"
 if [[ -s "$allowed_signers_file" ]]; then
   trusted_keys=$(awk '{ print $2 " " $3 }' "$allowed_signers_file" | sort -u | wc -l | tr -d ' ')
   pass "trust store lists $trusted_keys machine signing key(s)"
 elif [[ -n "$recorded_sign_key" ]]; then
-  warn "no ~/.ssh/allowed_signers; run: dotfiles-keys sync"
+  warn "no ~/.ssh/allowed_signers; run: braden-dots identity sync"
 fi
 
 if [[ "$credential_backend" == "service-account" ]]; then
@@ -228,12 +235,12 @@ if [[ "$credential_backend" == "service-account" ]]; then
     token_mode="$(stat -c '%a' "$service_account_token_file" 2>/dev/null || stat -f '%OLp' "$service_account_token_file" 2>/dev/null)"
     token_owner="$(stat -c '%u' "$service_account_token_file" 2>/dev/null || stat -f '%u' "$service_account_token_file" 2>/dev/null)"
     if [[ "$token_mode" == "600" && "$token_owner" == "$(id -u)" ]]; then
-      warn "service account token is a plaintext file; prefer: dotfiles-keys store-token"
+      warn "service account token is a plaintext file; prefer: braden-dots identity store-token"
     else
       fail "service account token file must be owned by this user with mode 0600"
     fi
   else
-    fail "no service account token found; run: dotfiles-keys store-token"
+    fail "no service account token found; run: braden-dots identity store-token"
   fi
 fi
 
@@ -255,7 +262,8 @@ if command -v gpg >/dev/null 2>&1 && gpg --list-secret-keys --with-colons 2>/dev
     # This machine used to sign with GPG and now signs with nothing. Say so
     # loudly: unsigned commits are easy to not notice until a branch is pushed.
     warn "commit signing is currently OFF: GPG keys exist but Git no longer uses them, and no SSH signing key is recorded"
-    note "Fix with: dotfiles-keys generate && dotfiles-keys publish && dotfiles-keys sync"
+    note "Fix with: braden-dots identity generate && braden-dots identity publish"
+    note "Then run: braden-dots identity sync"
   else
     note "GPG secret keys are still present but no longer wired into Git; commit signing uses SSH."
   fi

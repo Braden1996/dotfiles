@@ -1,0 +1,4 @@
+#!/bin/bash
+printf '%s\n' \
+	'warning: dotfiles-keys is deprecated; use braden-dots identity' >&2
+exec "${BRADEN_DOTS_BIN:-$HOME/.local/bin/braden-dots}" identity "$@"

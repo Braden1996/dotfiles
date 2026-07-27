@@ -5,6 +5,10 @@
 {{- end -}}
 {{- $cursorFlowLicense := "" -}}
 {{-   $cursorFlowLicense = get $currentCursorSettings "flow-icons.licenseKey" -}}
+{{- $cursorIgnoredSettings := without (default (list) (get $currentCursorSettings "settingsSync.ignoredSettings")) "-flow-icons.licenseKey" -}}
+{{- if not (has "flow-icons.licenseKey" $cursorIgnoredSettings) -}}
+{{-   $cursorIgnoredSettings = append $cursorIgnoredSettings "flow-icons.licenseKey" -}}
+{{- end -}}
 {
 	// ═══════════════════════════════════════════════════════════════════════════
 	// EDITOR: Visual Appearance
@@ -209,7 +213,7 @@
 {{ if $cursorFlowLicense }}
 	"flow-icons.licenseKey": {{ $cursorFlowLicense | quote }},
 {{ end }}
-	"settingsSync.ignoredSettings": ["flow-icons.licenseKey"],
+	"settingsSync.ignoredSettings": {{ $cursorIgnoredSettings | toJson }},
 	"versionlens.suggestions.showOnStartup": false,
 	"RadonIDE.panelLocation": "tab",
 	"react-native-tools.showUserTips": false,

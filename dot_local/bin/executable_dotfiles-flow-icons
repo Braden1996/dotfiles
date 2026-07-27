@@ -1,0 +1,4 @@
+#!/bin/bash
+printf '%s\n' \
+	'warning: dotfiles-flow-icons is deprecated; use braden-dots app flow-icons' >&2
+exec "${BRADEN_DOTS_BIN:-$HOME/.local/bin/braden-dots}" app flow-icons "$@"

@@ -1,0 +1,336 @@
+#!/bin/bash
+set -uo pipefail
+
+MODULE_DIR="$(
+	unset CDPATH
+	cd -- "$(dirname -- "$0")" && pwd
+)"
+readonly MODULE_DIR
+# shellcheck source=/dev/null
+source "$MODULE_DIR/lib.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: braden-dots <init|apply|sync|status|check|config> [options]
+
+  init                         Finish onboarding and validate this machine
+  apply                        Apply the current local Chezmoi source only
+  sync                         Integrate only safe upstream state, then apply
+  status [--json] [--repo PATH]
+                               Show machine, source, drift, and identity state
+  check                        Run the complete dotfiles validation suite
+  config show|edit             Show non-secret config or re-run prompts
+USAGE
+}
+
+require_machine_identity() {
+	if [[ -z "$DOTS_DEFAULT_GITHUB_USER" ]]; then
+		dots_fail "defaultGitHubUser is not configured for this machine"
+		dots_note "Run: braden-dots config edit"
+		return 1
+	fi
+}
+
+cmd_apply() {
+	dots_require_command "$DOTS_CHEZMOI" || return 1
+	dots_note "applying the current local Chezmoi source without fetching"
+	"$DOTS_CHEZMOI" apply
+}
+
+cmd_init() {
+	require_machine_identity || return 1
+	dots_require_command "$DOTS_CHEZMOI" || return 1
+
+	printf 'Configuring credentials\n'
+	"$MODULE_DIR/identity" setup || return 1
+
+	printf '\nConfiguring the dotfiles source route\n'
+	"$MODULE_DIR/source" remote --fix || return 1
+
+	printf '\nApplying managed state\n'
+	"$DOTS_CHEZMOI" apply || return 1
+
+	printf '\nRefreshing generated identity projections\n'
+	"$MODULE_DIR/identity" sync || return 1
+	"$MODULE_DIR/identity" ensure || return 1
+
+	printf '\nValidating the workstation\n'
+	"$MODULE_DIR/doctor"
+}
+
+sync_relation() {
+	local source="$1" upstream counts ahead=0 behind=0
+	upstream="$(git -C "$source" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+	if [[ -n "$upstream" ]]; then
+		counts="$(git -C "$source" rev-list --left-right --count "HEAD...$upstream" 2>/dev/null || printf '0 0')"
+		read -r ahead behind <<<"$counts"
+	fi
+	SYNC_UPSTREAM="$upstream"
+	SYNC_AHEAD="$ahead"
+	SYNC_BEHIND="$behind"
+}
+
+report_sync_relation() {
+	if ((SYNC_AHEAD > 0 && SYNC_BEHIND > 0)); then
+		dots_warn "source diverged: ahead $SYNC_AHEAD, behind $SYNC_BEHIND"
+		dots_note "Reconcile explicitly with: braden-dots source reconcile"
+	elif ((SYNC_AHEAD > 0)); then
+		dots_note "source has $SYNC_AHEAD unpublished local commit(s)"
+	elif ((SYNC_BEHIND > 0)); then
+		dots_note "source is $SYNC_BEHIND commit(s) behind ${SYNC_UPSTREAM:-upstream}"
+	else
+		dots_pass "source is synchronized with ${SYNC_UPSTREAM:-its known refs}"
+	fi
+}
+
+cmd_sync() {
+	require_machine_identity || return 1
+	dots_require_command "$DOTS_CHEZMOI" || return 1
+	local source dirty=0 fetch_ok=1 status=0
+	source="$(dots_require_source)" || return 1
+
+	# A work key may have expired before the fetch. This is best effort because
+	# a first sync may need the fetch/apply before all managed state exists.
+	"$MODULE_DIR/identity" ensure >/dev/null 2>&1 || true
+
+	printf 'Inspecting upstream source state\n'
+	if ! "$MODULE_DIR/source" fetch; then
+		fetch_ok=0
+		dots_warn "continuing with the current local source because upstream is unreachable"
+	fi
+
+	[[ -n "$(git -C "$source" status --porcelain=v1 --untracked-files=all)" ]] && dirty=1
+	sync_relation "$source"
+	if ((dirty == 1)); then
+		dots_warn "source is dirty; preserving the working tree and index exactly"
+		report_sync_relation
+		dots_note "When ready: braden-dots source publish -m \"Describe the dotfiles change\""
+	elif ((fetch_ok == 1 && SYNC_AHEAD == 0 && SYNC_BEHIND > 0)); then
+		if git -C "$source" merge --ff-only "$SYNC_UPSTREAM"; then
+			dots_pass "fast-forwarded the clean source to $SYNC_UPSTREAM"
+			sync_relation "$source"
+		else
+			dots_fail "safe fast-forward failed; source was not rewritten"
+			status=1
+		fi
+	elif ((SYNC_AHEAD > 0 && SYNC_BEHIND > 0)); then
+		report_sync_relation
+	else
+		report_sync_relation
+	fi
+
+	printf '\nApplying the current source\n'
+	"$DOTS_CHEZMOI" apply || status=1
+
+	printf '\nRefreshing credentials and generated routing\n'
+	if "$MODULE_DIR/identity" sync; then
+		"$MODULE_DIR/identity" ensure || status=1
+	else
+		dots_warn "credential projection refresh failed; managed files were still applied"
+		status=1
+	fi
+
+	if ((dirty == 1)); then
+		dots_pass "sync completed without staging, stashing, committing, or rewriting source changes"
+	fi
+	return "$status"
+}
+
+managed_drift() {
+	local output
+	output="$("$DOTS_CHEZMOI" status 2>/dev/null || true)"
+	if [[ -n "$output" ]]; then
+		printf '%s\n' "$output" | awk 'NF { count++ } END { print count + 0 }'
+	else
+		printf '0\n'
+	fi
+}
+
+parse_status_options() {
+	STATUS_JSON=0
+	STATUS_REPO=""
+	while (($# > 0)); do
+		case "$1" in
+		--json)
+			STATUS_JSON=1
+			shift
+			;;
+		--repo)
+			if (($# < 2)) || [[ -z "$2" ]]; then
+				dots_fail "--repo requires a path"
+				return 2
+			fi
+			STATUS_REPO="$2"
+			shift 2
+			;;
+		--repo=*)
+			STATUS_REPO="${1#*=}"
+			shift
+			;;
+		-h | --help)
+			usage
+			return 64
+			;;
+		*)
+			dots_fail "unknown status option: $1"
+			return 2
+			;;
+		esac
+	done
+}
+
+cmd_status_json() {
+	dots_require_command jq || return 1
+	local source_json identity_json drift identity_args=()
+	source_json="$("$MODULE_DIR/source" status --json)" || return 1
+	[[ -n "$STATUS_REPO" ]] && identity_args=(--repo "$STATUS_REPO")
+	identity_json="$("$MODULE_DIR/identity" status "${identity_args[@]+"${identity_args[@]}"}" --json)" ||
+		return 1
+	drift="$(managed_drift)"
+
+	jq -n \
+		--arg profile "$DOTS_PROFILE" \
+		--arg machine "$DOTS_MACHINE" \
+		--arg backend "$DOTS_CREDENTIAL_BACKEND" \
+		--arg gitName "$DOTS_GIT_NAME" \
+		--arg gitEmail "$DOTS_DEFAULT_EMAIL" \
+		--arg githubUser "$DOTS_DEFAULT_GITHUB_USER" \
+		--argjson drift "$drift" \
+		--argjson sourceReport "$source_json" \
+		--argjson identityReport "$identity_json" '
+      {
+        schemaVersion: 1,
+        machine: {
+          name: $machine,
+          profile: $profile,
+          credentialBackend: $backend
+        },
+        configuredIdentity: {
+          gitName: $gitName,
+          gitEmail: $gitEmail,
+          githubUser: (if $githubUser == "" then null else $githubUser end)
+        },
+        source: $sourceReport.source,
+        managedState: {
+          drifted: ($drift > 0),
+          driftCount: $drift
+        },
+        credentials: $identityReport.credentials,
+        effectiveRepository: $identityReport.effectiveRepository,
+        updates: {
+          checked: false,
+          command: "braden-dots update --check"
+        },
+        issues: (
+          ($sourceReport.issues + $identityReport.issues) | unique
+        )
+      }
+    '
+}
+
+cmd_status_human() {
+	local drift identity_args=()
+	printf 'Machine\n'
+	dots_note "name:              $DOTS_MACHINE"
+	dots_note "profile:           $DOTS_PROFILE"
+	dots_note "credential backend: $DOTS_CREDENTIAL_BACKEND"
+	dots_note "default Git author: $DOTS_GIT_NAME <$DOTS_DEFAULT_EMAIL>"
+	dots_note "github.com login:   ${DOTS_DEFAULT_GITHUB_USER:-<unset>}"
+
+	printf '\n'
+	"$MODULE_DIR/source" status || true
+
+	printf '\nManaged targets\n'
+	drift="$(managed_drift)"
+	if ((drift == 0)); then
+		dots_pass "managed targets match the current source"
+	else
+		dots_warn "$drift managed target(s) differ; review with: chezmoi status"
+	fi
+
+	printf '\nCredentials\n'
+	[[ -n "$STATUS_REPO" ]] && identity_args=(--repo "$STATUS_REPO")
+	"$MODULE_DIR/identity" status "${identity_args[@]+"${identity_args[@]}"}" || true
+
+	printf '\nUpdates\n'
+	dots_note "inspect available updates with: braden-dots update --check"
+}
+
+cmd_status() {
+	parse_status_options "$@"
+	local parse_status=$?
+	[[ "$parse_status" -eq 0 ]] || {
+		[[ "$parse_status" -eq 64 ]] && return 0
+		return "$parse_status"
+	}
+	if ((STATUS_JSON == 1)); then
+		cmd_status_json
+	else
+		cmd_status_human
+	fi
+}
+
+cmd_check() {
+	local source
+	source="$(dots_require_source)" || return 1
+	dots_run_mise_task "$source" check
+}
+
+cmd_config_show() {
+	printf 'Machine configuration (non-secret)\n'
+	printf '  machineName:       %s\n' "$DOTS_MACHINE"
+	printf '  machineType:       %s\n' "$DOTS_PROFILE"
+	printf '  credentialBackend: %s\n' "$DOTS_CREDENTIAL_BACKEND"
+	printf '  gitName:           %s\n' "$DOTS_GIT_NAME"
+	printf '  defaultEmail:      %s\n' "$DOTS_DEFAULT_EMAIL"
+	printf '  defaultGitHubUser: %s\n' "${DOTS_DEFAULT_GITHUB_USER:-<unset>}"
+	printf '  source:            %s/%s (%s)\n' \
+		"$DOTS_SOURCE_OWNER" "$DOTS_SOURCE_REPOSITORY" "$DOTS_PRIMARY_BRANCH"
+}
+
+cmd_config_edit() {
+	dots_note "re-running prompted Chezmoi initialization; existing answers are defaults"
+	"$DOTS_CHEZMOI" init --prompt
+	dots_note "Apply the new projection with: braden-dots init"
+}
+
+cmd_config() {
+	case "${1:-show}" in
+	show)
+		[[ $# -le 1 ]] || return 2
+		cmd_config_show
+		;;
+	edit)
+		[[ $# -eq 1 ]] || return 2
+		cmd_config_edit
+		;;
+	-h | --help | help)
+		printf 'Usage: braden-dots config show|edit\n'
+		;;
+	*)
+		dots_fail "unknown config command: $1"
+		return 2
+		;;
+	esac
+}
+
+main() {
+	local command="${1:-status}"
+	[[ $# -gt 0 ]] && shift
+	case "$command" in
+	init) cmd_init "$@" ;;
+	apply) cmd_apply "$@" ;;
+	sync) cmd_sync "$@" ;;
+	status) cmd_status "$@" ;;
+	check) cmd_check "$@" ;;
+	config) cmd_config "$@" ;;
+	-h | --help | help) usage ;;
+	*)
+		dots_fail "unknown core command: $command"
+		usage >&2
+		return 2
+		;;
+	esac
+}
+
+main "$@"

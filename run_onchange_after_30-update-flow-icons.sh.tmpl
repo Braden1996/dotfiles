@@ -3,6 +3,7 @@
 set -euo pipefail
 
 # Reviewed upstream revision: {{ .flowIcons.revision }}
-# Helper source hash: {{ include "dot_local/bin/executable_dotfiles-flow-icons.tmpl" | sha256sum }}
-{{ printf "%s/.local/bin/dotfiles-flow-icons" .chezmoi.homeDir | quote }}
+# Helper source hash: {{ include "dot_local/libexec/braden-dots/executable_flow-icons.tmpl" | sha256sum }}
+# Settings patcher hash: {{ include "dot_local/libexec/braden-dots/jsonc-setting.cjs" | sha256sum }}
+{{ printf "%s/.local/bin/braden-dots" .chezmoi.homeDir | quote }} app flow-icons
 {{- end }}

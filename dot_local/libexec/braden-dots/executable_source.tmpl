@@ -1,0 +1,770 @@
+#!/bin/bash
+set -uo pipefail
+
+MODULE_DIR="$(
+	unset CDPATH
+	cd -- "$(dirname -- "$0")" && pwd
+)"
+readonly MODULE_DIR
+# shellcheck source=/dev/null
+source "$MODULE_DIR/lib.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: braden-dots source <command> [options]
+
+Commands:
+  path                         Print the Chezmoi source path
+  status [--json]              Show source, upstream, and identity routing state
+  diff                         Review staged, unstaged, and untracked changes
+  remote [--fix]               Show or explicitly repair the source origin
+  commit [-m MESSAGE] [--staged]
+                               Validate and create a signed source commit
+  fetch                        Update upstream refs without touching the worktree
+  reconcile                    Fast-forward or rebase clean unpublished commits
+  publish [-m MESSAGE] [--staged]
+                               Commit, reconcile, check, and push safely
+  push                         Push normally and verify the upstream tip
+  conflicts                    List only rebase conflicts and progress
+  continue                     Validate resolved files and continue the rebase
+  abort                        Abort the active rebase and report the restored tip
+USAGE
+}
+
+source_path() {
+	dots_require_source
+}
+
+git_source() {
+	local source
+	source="$(source_path)" || return 1
+	git -C "$source" "$@"
+}
+
+source_branch() {
+	git_source symbolic-ref --quiet --short HEAD 2>/dev/null || printf '(detached)\n'
+}
+
+source_upstream() {
+	git_source rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null
+}
+
+upstream_remote() {
+	local upstream
+	upstream="$(source_upstream)" || return 1
+	printf '%s\n' "${upstream%%/*}"
+}
+
+source_dirty() {
+	[[ -n "$(git_source status --porcelain=v1 --untracked-files=all)" ]]
+}
+
+ahead_behind() {
+	local upstream counts
+	if ! upstream="$(source_upstream)"; then
+		printf '0 0\n'
+		return 1
+	fi
+	counts="$(git_source rev-list --left-right --count "HEAD...$upstream" 2>/dev/null)" ||
+		return 1
+	printf '%s\n' "$counts"
+}
+
+relationship() {
+	local ahead="$1" behind="$2"
+	if ((ahead > 0 && behind > 0)); then
+		printf 'diverged\n'
+	elif ((ahead > 0)); then
+		printf 'ahead\n'
+	elif ((behind > 0)); then
+		printf 'behind\n'
+	else
+		printf 'synchronized\n'
+	fi
+}
+
+origin_url() {
+	git_source config --get remote.origin.url 2>/dev/null
+}
+
+remote_host() {
+	local url="$1"
+	case "$url" in
+	git@*:*/*)
+		url="${url#git@}"
+		printf '%s\n' "${url%%:*}"
+		;;
+	ssh://git@*/*)
+		url="${url#ssh://git@}"
+		printf '%s\n' "${url%%/*}"
+		;;
+	*) return 1 ;;
+	esac
+}
+
+authenticated_user() {
+	local host="$1" output=""
+	[[ "${BRADEN_DOTS_SKIP_SSH_TEST:-0}" != 1 ]] || return 1
+	command -v ssh >/dev/null 2>&1 || return 1
+	output="$(
+		ssh -o BatchMode=yes -o ConnectTimeout=4 -T "git@$host" 2>&1
+	)" || true
+	sed -nE 's/.*Hi ([^!]+)!.*/\1/p' <<<"$output" | head -n 1
+}
+
+collect_status() {
+	local source branch upstream remote dirty=0 ahead=0 behind=0 relation
+	local origin expected_origin="" expected_host="" actual_host="" actual_user=""
+	source="$(source_path)" || return 1
+	branch="$(source_branch)"
+	upstream="$(source_upstream 2>/dev/null || true)"
+	remote="$(upstream_remote 2>/dev/null || true)"
+	[[ -n "$remote" ]] || remote=origin
+	source_dirty && dirty=1
+	read -r ahead behind <<<"$(ahead_behind 2>/dev/null || printf '0 0')"
+	relation="$(relationship "$ahead" "$behind")"
+	origin="$(origin_url 2>/dev/null || true)"
+	expected_origin="$(dots_recommended_origin 2>/dev/null || true)"
+	expected_host="$(dots_source_ssh_host 2>/dev/null || true)"
+	actual_host="$(remote_host "$origin" 2>/dev/null || true)"
+	if [[ -n "$actual_host" ]]; then
+		actual_user="$(authenticated_user "$actual_host" 2>/dev/null || true)"
+	fi
+
+	STATUS_SOURCE="$source"
+	STATUS_BRANCH="$branch"
+	STATUS_UPSTREAM="$upstream"
+	STATUS_REMOTE="$remote"
+	STATUS_DIRTY="$dirty"
+	STATUS_AHEAD="$ahead"
+	STATUS_BEHIND="$behind"
+	STATUS_RELATION="$relation"
+	STATUS_ORIGIN="$origin"
+	STATUS_EXPECTED_ORIGIN="$expected_origin"
+	STATUS_EXPECTED_HOST="$expected_host"
+	STATUS_ACTUAL_HOST="$actual_host"
+	STATUS_ACTUAL_USER="$actual_user"
+}
+
+status_issues() {
+	local issues=()
+	((STATUS_DIRTY == 1)) && issues+=("source_dirty")
+	[[ "$STATUS_RELATION" == diverged ]] && issues+=("source_diverged")
+	[[ -n "$DOTS_DEFAULT_GITHUB_USER" ]] || issues+=("default_github_user_missing")
+	[[ -n "$STATUS_UPSTREAM" ]] || issues+=("source_upstream_missing")
+	if [[ -z "$STATUS_EXPECTED_ORIGIN" ]] ||
+		[[ "$STATUS_ORIGIN" != "$STATUS_EXPECTED_ORIGIN" ]] ||
+		[[ -z "$STATUS_ACTUAL_HOST" ]] ||
+		[[ "$STATUS_ACTUAL_HOST" != "$STATUS_EXPECTED_HOST" ]]; then
+		issues+=("remote_identity_mismatch")
+	elif [[ -n "$STATUS_ACTUAL_USER" ]] &&
+		[[ "$(dots_normalize_login "$STATUS_ACTUAL_USER")" != "$(dots_normalize_login "$DOTS_SOURCE_OWNER")" ]]; then
+		issues+=("remote_identity_mismatch")
+	fi
+	printf '%s\n' "${issues[@]+"${issues[@]}"}"
+}
+
+cmd_status_json() {
+	dots_require_command jq || return 1
+	collect_status || return 1
+	local issues_json
+	issues_json="$(status_issues | awk 'NF' | jq -Rsc 'split("\n") | map(select(length > 0))')"
+	jq -n \
+		--arg path "$STATUS_SOURCE" \
+		--arg branch "$STATUS_BRANCH" \
+		--arg upstream "$STATUS_UPSTREAM" \
+		--arg remote "$STATUS_REMOTE" \
+		--arg origin "$STATUS_ORIGIN" \
+		--arg expectedOrigin "$STATUS_EXPECTED_ORIGIN" \
+		--arg expectedHost "$STATUS_EXPECTED_HOST" \
+		--arg authenticatedUser "$STATUS_ACTUAL_USER" \
+		--arg relation "$STATUS_RELATION" \
+		--argjson dirty "$STATUS_DIRTY" \
+		--argjson ahead "$STATUS_AHEAD" \
+		--argjson behind "$STATUS_BEHIND" \
+		--argjson issues "$issues_json" '
+      {
+        schemaVersion: 1,
+        source: {
+          path: $path,
+          branch: $branch,
+          upstream: (if $upstream == "" then null else $upstream end),
+          remote: $remote,
+          origin: (if $origin == "" then null else $origin end),
+          expectedOrigin: (if $expectedOrigin == "" then null else $expectedOrigin end),
+          expectedSshHost: (if $expectedHost == "" then null else $expectedHost end),
+          authenticatedGitHubUser: (
+            if $authenticatedUser == "" then null else $authenticatedUser end
+          ),
+          dirty: ($dirty == 1),
+          ahead: $ahead,
+          behind: $behind,
+          relation: $relation
+        },
+        issues: $issues
+      }
+    '
+}
+
+cmd_status_human() {
+	collect_status || return 1
+	printf 'Dotfiles source\n'
+	dots_note "path:     $STATUS_SOURCE"
+	dots_note "branch:   $STATUS_BRANCH"
+	dots_note "upstream: ${STATUS_UPSTREAM:-<unset>}"
+	dots_note "state:    $STATUS_RELATION (ahead $STATUS_AHEAD, behind $STATUS_BEHIND)"
+	if ((STATUS_DIRTY == 1)); then
+		dots_warn "source has local changes (normal; sync will preserve them)"
+	else
+		dots_pass "working tree and index are clean"
+	fi
+
+	printf '\nSource identity route\n'
+	dots_note "configured github.com login: ${DOTS_DEFAULT_GITHUB_USER:-<unset>}"
+	dots_note "origin:   ${STATUS_ORIGIN:-<unset>}"
+	dots_note "expected: ${STATUS_EXPECTED_ORIGIN:-<identity projection unavailable>}"
+	if [[ -n "$STATUS_ACTUAL_USER" ]]; then
+		dots_note "SSH authenticated as: $STATUS_ACTUAL_USER"
+	fi
+
+	local issue found=0
+	while IFS= read -r issue; do
+		[[ -n "$issue" ]] || continue
+		found=1
+		case "$issue" in
+		default_github_user_missing)
+			dots_fail "default GitHub login is not configured; run: braden-dots config edit"
+			;;
+		remote_identity_mismatch)
+			dots_warn "origin does not use the identity route for $DOTS_SOURCE_OWNER"
+			[[ -n "$STATUS_EXPECTED_ORIGIN" ]] &&
+				dots_note "Repair explicitly with: braden-dots source remote --fix"
+			;;
+		source_diverged)
+			dots_warn "local and upstream histories diverged"
+			dots_note "Reconcile explicitly with: braden-dots source reconcile"
+			;;
+		source_upstream_missing)
+			dots_warn "the current branch has no configured upstream"
+			;;
+		esac
+	done <<<"$(status_issues)"
+	((found == 0)) && dots_pass "source routing and upstream state are consistent"
+}
+
+cmd_status() {
+	case "${1:-}" in
+	"") cmd_status_human ;;
+	--json) cmd_status_json ;;
+	-h | --help) usage ;;
+	*)
+		dots_fail "unknown source status option: $1"
+		return 2
+		;;
+	esac
+}
+
+cmd_path() {
+	source_path
+}
+
+cmd_diff() {
+	local source
+	source="$(source_path)" || return 1
+	printf 'Source status\n'
+	git -C "$source" status --short --branch
+	printf '\nStaged changes\n'
+	git -C "$source" diff --cached --stat
+	git -C "$source" diff --cached
+	printf '\nUnstaged changes\n'
+	git -C "$source" diff --stat
+	git -C "$source" diff
+	printf '\nUntracked files\n'
+	git -C "$source" ls-files --others --exclude-standard
+}
+
+cmd_remote() {
+	local fix=0
+	case "${1:-}" in
+	"") ;;
+	--fix) fix=1 ;;
+	-h | --help)
+		dots_note "usage: braden-dots source remote [--fix]"
+		return 0
+		;;
+	*)
+		dots_fail "unknown source remote option: $1"
+		return 2
+		;;
+	esac
+
+	if [[ -z "$DOTS_DEFAULT_GITHUB_USER" ]]; then
+		dots_fail "defaultGitHubUser is missing; run: braden-dots config edit"
+		return 1
+	fi
+
+	local source expected current
+	source="$(source_path)" || return 1
+	if ! expected="$(dots_recommended_origin)"; then
+		dots_fail "no generated identity scope can route $DOTS_SOURCE_OWNER/$DOTS_SOURCE_REPOSITORY"
+		dots_note "Run: braden-dots identity sync"
+		return 1
+	fi
+	current="$(git -C "$source" config --get remote.origin.url 2>/dev/null || true)"
+	dots_note "current:  ${current:-<unset>}"
+	dots_note "required: $expected"
+
+	if ((fix == 0)); then
+		[[ "$current" == "$expected" ]] ||
+			dots_note "Repair explicitly with: braden-dots source remote --fix"
+		return 0
+	fi
+
+	if git -C "$source" remote get-url origin >/dev/null 2>&1; then
+		git -C "$source" remote set-url origin "$expected"
+	else
+		git -C "$source" remote add origin "$expected"
+	fi
+	dots_pass "source origin now uses the configured identity: $expected"
+}
+
+cmd_fetch() {
+	local source remote
+	source="$(source_path)" || return 1
+	remote="$(upstream_remote 2>/dev/null || true)"
+	[[ -n "$remote" ]] || remote=origin
+	if ! git -C "$source" remote get-url "$remote" >/dev/null 2>&1; then
+		dots_fail "source remote is not configured: $remote"
+		return 1
+	fi
+	dots_note "fetching $remote without touching the working tree"
+	if git -C "$source" fetch --prune "$remote"; then
+		dots_pass "updated remote refs from $remote"
+	else
+		dots_fail "could not fetch $remote; local source was left untouched"
+		return 1
+	fi
+}
+
+require_source_identity_route() {
+	local current expected
+	current="$(origin_url 2>/dev/null || true)"
+	expected="$(dots_recommended_origin 2>/dev/null || true)"
+	if [[ -z "$expected" ]]; then
+		dots_fail "the source identity route cannot be resolved"
+		dots_note "Run: braden-dots identity sync"
+		return 1
+	fi
+	if [[ "$current" != "$expected" ]]; then
+		dots_fail "refusing to publish through an unexpected source origin"
+		dots_note "current:  ${current:-<unset>}"
+		dots_note "required: $expected"
+		dots_note "Repair explicitly with: braden-dots source remote --fix"
+		return 1
+	fi
+}
+
+run_secret_scan() {
+	local source="$1"
+	if [[ -n "${BRADEN_DOTS_SECRET_SCAN_COMMAND:-}" ]]; then
+		"$BRADEN_DOTS_SECRET_SCAN_COMMAND" "$source"
+	elif command -v gitleaks >/dev/null 2>&1; then
+		gitleaks dir --config "$source/.gitleaks.toml" --redact "$source"
+	else
+		(
+			cd "$source" || exit 1
+			"$DOTS_MISE" exec -- gitleaks dir --config .gitleaks.toml --redact .
+		)
+	fi
+}
+
+run_fast_checks() {
+	local source="$1"
+	if [[ -n "${BRADEN_DOTS_FAST_CHECK_COMMAND:-}" ]]; then
+		"$BRADEN_DOTS_FAST_CHECK_COMMAND" "$source"
+	else
+		dots_run_mise_task "$source" check:static
+	fi
+}
+
+run_full_checks() {
+	local source="$1"
+	if [[ -n "${BRADEN_DOTS_FULL_CHECK_COMMAND:-}" ]]; then
+		"$BRADEN_DOTS_FULL_CHECK_COMMAND" "$source"
+	else
+		dots_run_mise_task "$source" check
+	fi
+}
+
+identity_ensure() {
+	if [[ -n "${BRADEN_DOTS_IDENTITY_COMMAND:-}" ]]; then
+		"$BRADEN_DOTS_IDENTITY_COMMAND" ensure
+	else
+		"$DOTS_BIN" identity ensure
+	fi
+}
+
+validate_staged() {
+	local source="$1"
+	if git -C "$source" diff --cached --quiet --exit-code; then
+		dots_fail "there are no staged source changes to commit"
+		return 1
+	fi
+
+	printf 'Staged source changes\n'
+	git -C "$source" diff --cached --stat
+	identity_ensure || {
+		dots_fail "managed signing keys are unavailable"
+		return 1
+	}
+	git -C "$source" diff --cached --check || {
+		dots_fail "staged changes contain whitespace errors"
+		return 1
+	}
+	run_secret_scan "$source" || {
+		dots_fail "secret scanning failed; commit was not created"
+		return 1
+	}
+	run_fast_checks "$source" || {
+		dots_fail "fast validation failed; commit was not created"
+		return 1
+	}
+}
+
+parse_commit_options() {
+	COMMIT_MESSAGE=""
+	COMMIT_STAGED=0
+	while (($# > 0)); do
+		case "$1" in
+		-m | --message)
+			if (($# < 2)) || [[ -z "$2" ]]; then
+				dots_fail "$1 requires a non-empty message"
+				return 2
+			fi
+			COMMIT_MESSAGE="$2"
+			shift 2
+			;;
+		--message=*)
+			COMMIT_MESSAGE="${1#*=}"
+			[[ -n "$COMMIT_MESSAGE" ]] || {
+				dots_fail "--message requires a non-empty value"
+				return 2
+			}
+			shift
+			;;
+		--staged)
+			COMMIT_STAGED=1
+			shift
+			;;
+		-h | --help)
+			dots_note "usage: braden-dots source commit [-m MESSAGE] [--staged]"
+			return 64
+			;;
+		*)
+			dots_fail "unknown source commit option: $1"
+			return 2
+			;;
+		esac
+	done
+}
+
+commit_source() {
+	local source="$1"
+	shift
+	parse_commit_options "$@"
+	local parse_status=$?
+	[[ "$parse_status" -eq 0 ]] || {
+		[[ "$parse_status" -eq 64 ]] && return 0
+		return "$parse_status"
+	}
+
+	if [[ -z "$COMMIT_MESSAGE" ]] && { [[ ! -t 0 ]] || [[ ! -t 1 ]]; }; then
+		dots_fail "a commit message is required outside an interactive terminal"
+		dots_note "Use: braden-dots source commit -m \"Describe the dotfiles change\""
+		return 2
+	fi
+
+	if ((COMMIT_STAGED == 0)); then
+		git -C "$source" add -A
+	fi
+	validate_staged "$source" || return 1
+
+	if [[ -n "$COMMIT_MESSAGE" ]]; then
+		git -C "$source" commit -S -m "$COMMIT_MESSAGE"
+	else
+		git -C "$source" commit -S
+	fi
+}
+
+cmd_commit() {
+	local source
+	source="$(source_path)" || return 1
+	commit_source "$source" "$@"
+}
+
+rebase_in_progress() {
+	local source="$1" git_dir git_path
+	git_dir="$(git -C "$source" rev-parse --absolute-git-dir)" || return 1
+	git_path="$git_dir/rebase-merge"
+	[[ -d "$git_path" ]] && return 0
+	git_path="$git_dir/rebase-apply"
+	[[ -d "$git_path" ]]
+}
+
+cmd_reconcile() {
+	local source upstream ahead behind branch backup
+	source="$(source_path)" || return 1
+	if source_dirty; then
+		dots_fail "source reconcile requires a clean working tree and index"
+		dots_note "Commit ready work with: braden-dots source publish -m \"...\""
+		return 1
+	fi
+	rebase_in_progress "$source" && {
+		dots_fail "a rebase is already active"
+		dots_note "Use: braden-dots source conflicts, continue, or abort"
+		return 1
+	}
+	cmd_fetch || return 1
+	upstream="$(source_upstream 2>/dev/null || true)"
+	if [[ -z "$upstream" ]]; then
+		dots_fail "the current source branch has no upstream"
+		return 1
+	fi
+	read -r ahead behind <<<"$(ahead_behind)"
+	if ((ahead == 0 && behind == 0)); then
+		dots_pass "source is already reconciled with $upstream"
+		return 0
+	fi
+	if ((ahead == 0 && behind > 0)); then
+		git -C "$source" merge --ff-only "$upstream" || return 1
+		dots_pass "fast-forwarded source to $upstream"
+		return 0
+	fi
+	if ((ahead > 0 && behind == 0)); then
+		dots_note "$ahead local commit(s) are ready to publish"
+		return 0
+	fi
+
+	branch="$(source_branch)"
+	backup="refs/braden-dots/backups/$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$source" rev-parse --short HEAD)"
+	git -C "$source" update-ref "$backup" HEAD || return 1
+	dots_pass "created recoverable backup ref: $backup"
+	dots_note "rebasing $branch onto $upstream"
+	if git -C "$source" rebase "$upstream"; then
+		dots_pass "rebased unpublished source commits onto $upstream"
+	else
+		dots_fail "rebase stopped for manual conflict resolution"
+		dots_note "Inspect:  braden-dots source conflicts"
+		dots_note "Resume:   braden-dots source continue"
+		dots_note "Restore:  braden-dots source abort"
+		return 1
+	fi
+}
+
+rebase_progress() {
+	local source="$1" git_dir dir current total
+	git_dir="$(git -C "$source" rev-parse --absolute-git-dir)" || return 1
+	dir="$git_dir/rebase-merge"
+	if [[ -d "$dir" ]]; then
+		current="$(sed -n '1p' "$dir/msgnum" 2>/dev/null || true)"
+		total="$(sed -n '1p' "$dir/end" 2>/dev/null || true)"
+	else
+		dir="$git_dir/rebase-apply"
+		current="$(sed -n '1p' "$dir/next" 2>/dev/null || true)"
+		total="$(sed -n '1p' "$dir/last" 2>/dev/null || true)"
+	fi
+	if [[ -n "$current" && -n "$total" ]]; then
+		printf '%s/%s\n' "$current" "$total"
+	else
+		printf 'unknown\n'
+	fi
+}
+
+cmd_conflicts() {
+	local source files
+	source="$(source_path)" || return 1
+	if ! rebase_in_progress "$source"; then
+		dots_note "no source rebase is active"
+		return 0
+	fi
+	dots_note "rebase step: $(rebase_progress "$source")"
+	files="$(git -C "$source" diff --name-only --diff-filter=U)"
+	if [[ -z "$files" ]]; then
+		dots_note "no unmerged files remain; run: braden-dots source continue"
+	else
+		printf '%s\n' "$files"
+	fi
+}
+
+cmd_continue() {
+	local source file marker_error=0
+	local files=()
+	source="$(source_path)" || return 1
+	if ! rebase_in_progress "$source"; then
+		dots_fail "no source rebase is active"
+		return 1
+	fi
+
+	while IFS= read -r -d '' file; do
+		files+=("$file")
+		if [[ -f "$source/$file" ]] &&
+			grep -nE '^(<<<<<<<|=======|>>>>>>>)' "$source/$file" >/dev/null; then
+			dots_fail "conflict markers remain in: $file"
+			marker_error=1
+		fi
+	done < <(git -C "$source" diff --name-only -z --diff-filter=U)
+	((marker_error == 0)) || return 1
+
+	if ((${#files[@]} > 0)); then
+		git -C "$source" add -A -- "${files[@]}" || return 1
+	fi
+	if [[ -n "$(git -C "$source" diff --name-only --diff-filter=U)" ]]; then
+		dots_fail "unmerged source entries remain"
+		return 1
+	fi
+	git -C "$source" diff --cached --check || return 1
+
+	if GIT_EDITOR=true git -C "$source" rebase --continue; then
+		dots_pass "source rebase continued successfully"
+		if rebase_in_progress "$source"; then
+			dots_note "another rebase step remains"
+		else
+			dots_note "Validate and push with: braden-dots source publish"
+		fi
+	else
+		dots_fail "rebase continuation stopped"
+		dots_note "Inspect with: braden-dots source conflicts"
+		return 1
+	fi
+}
+
+cmd_abort() {
+	local source before after
+	source="$(source_path)" || return 1
+	if ! rebase_in_progress "$source"; then
+		dots_fail "no source rebase is active"
+		return 1
+	fi
+	before="$(git -C "$source" rev-parse --short HEAD 2>/dev/null || true)"
+	git -C "$source" rebase --abort || return 1
+	after="$(git -C "$source" rev-parse --short HEAD)"
+	dots_pass "aborted source rebase; restored $after (was ${before:-unknown})"
+}
+
+cmd_push() {
+	local source branch upstream remote upstream_branch ahead behind local_tip remote_tip
+	source="$(source_path)" || return 1
+	require_source_identity_route || return 1
+	if source_dirty; then
+		dots_fail "refusing to push while the source is dirty"
+		return 1
+	fi
+	branch="$(source_branch)"
+	if [[ "$branch" != "$DOTS_PRIMARY_BRANCH" ]]; then
+		dots_fail "source push expects primary branch '$DOTS_PRIMARY_BRANCH', found '$branch'"
+		return 1
+	fi
+	upstream="$(source_upstream 2>/dev/null || true)"
+	if [[ -z "$upstream" ]]; then
+		dots_fail "source branch has no configured upstream"
+		return 1
+	fi
+	read -r ahead behind <<<"$(ahead_behind)"
+	if ((behind > 0)); then
+		dots_fail "upstream advanced; fetch and reconcile before pushing"
+		dots_note "Run: braden-dots source reconcile"
+		return 1
+	fi
+	if ((ahead == 0)); then
+		dots_pass "source is already published"
+		return 0
+	fi
+	remote="${upstream%%/*}"
+	upstream_branch="${upstream#*/}"
+	if ! git -C "$source" push "$remote" "HEAD:$upstream_branch"; then
+		dots_fail "normal push was rejected; no force push was attempted"
+		dots_note "Run: braden-dots source fetch"
+		dots_note "Then: braden-dots source reconcile"
+		return 1
+	fi
+	local_tip="$(git -C "$source" rev-parse HEAD)"
+	remote_tip="$(git -C "$source" rev-parse "refs/remotes/$remote/$upstream_branch" 2>/dev/null || true)"
+	if [[ "$local_tip" != "$remote_tip" ]]; then
+		dots_fail "push returned success but local and upstream tips do not match"
+		return 1
+	fi
+	dots_pass "published $branch at $(git -C "$source" rev-parse --short HEAD)"
+}
+
+cmd_publish() {
+	local source dirty_before=0 ahead behind
+	source="$(source_path)" || return 1
+	require_source_identity_route || return 1
+	parse_commit_options "$@"
+	local parse_status=$?
+	[[ "$parse_status" -eq 0 ]] || {
+		[[ "$parse_status" -eq 64 ]] && return 0
+		return "$parse_status"
+	}
+
+	cmd_fetch || return 1
+	source_dirty && dirty_before=1
+	if ((dirty_before == 1 && COMMIT_STAGED == 1)); then
+		if ! git -C "$source" diff --quiet ||
+			[[ -n "$(git -C "$source" ls-files --others --exclude-standard)" ]]; then
+			dots_fail "--staged publish requires no additional unstaged or untracked source changes"
+			dots_note "Use 'source commit --staged' first, or publish the complete source state."
+			return 1
+		fi
+	fi
+
+	if ((dirty_before == 1)); then
+		commit_source "$source" "$@"
+		local commit_status=$?
+		if ((commit_status != 0)); then
+			dots_note "Resume with: braden-dots source publish${COMMIT_MESSAGE:+ -m \"$COMMIT_MESSAGE\"}"
+			return "$commit_status"
+		fi
+	fi
+
+	read -r ahead behind <<<"$(ahead_behind 2>/dev/null || printf '0 0')"
+	if ((dirty_before == 0 && ahead == 0 && behind == 0)); then
+		dots_pass "source is clean and already synchronized; nothing to publish"
+		return 0
+	fi
+
+	cmd_reconcile || return 1
+	if ! run_full_checks "$source"; then
+		dots_fail "complete validation failed; reviewed commits remain local and unpushed"
+		dots_note "Resume with: braden-dots source publish"
+		return 1
+	fi
+	cmd_push
+}
+
+main() {
+	local command="${1:-status}"
+	[[ $# -gt 0 ]] && shift
+	case "$command" in
+	path) cmd_path "$@" ;;
+	status) cmd_status "$@" ;;
+	diff) cmd_diff "$@" ;;
+	remote) cmd_remote "$@" ;;
+	commit) cmd_commit "$@" ;;
+	fetch) cmd_fetch "$@" ;;
+	reconcile) cmd_reconcile "$@" ;;
+	publish) cmd_publish "$@" ;;
+	push) cmd_push "$@" ;;
+	conflicts) cmd_conflicts "$@" ;;
+	continue) cmd_continue "$@" ;;
+	abort) cmd_abort "$@" ;;
+	-h | --help | help) usage ;;
+	*)
+		dots_fail "unknown source command: $command"
+		usage >&2
+		return 2
+		;;
+	esac
+}
+
+main "$@"

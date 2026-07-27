@@ -5,10 +5,10 @@ echo
 echo "Running the dotfiles health check..."
 echo
 
-if command -v dotfiles-doctor >/dev/null 2>&1; then
+if command -v braden-dots >/dev/null 2>&1; then
   # The doctor is intentionally advisory during first apply: account-level
   # privacy choices, GPG setup, and application sign-ins may still need input.
-  dotfiles-doctor || true
+  braden-dots doctor || true
 else
-  echo "dotfiles-doctor is not on PATH yet. Open a new shell and run it manually."
+  echo "braden-dots is not on PATH yet. Open a new shell and run it manually."
 fi

@@ -11,7 +11,7 @@ if (( ${__BRADEN_ZSH_HAS_TTY:-1} )); then
   [[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
 fi
 
-# 1Password is wired up already; see `dotfiles-keys`. To pull another secret,
+# 1Password is wired up already; see `braden-dots identity`. To pull another secret,
 # resolve it on demand rather than at shell startup, and note that a work
 # machine's service account cannot read Private vaults -- only the shared one.
 # export NGROK_AUTHTOKEN="$(op read "op://$opVault/ngrok/credential")"

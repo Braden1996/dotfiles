@@ -1,0 +1,78 @@
+#!/bin/bash
+set -uo pipefail
+
+readonly LIBEXEC=${BRADEN_DOTS_LIBEXEC:-"$HOME/.local/libexec/braden-dots"}
+
+usage() {
+	cat <<'USAGE'
+Usage: braden-dots <command> [options]
+
+Workflows:
+  init                         Finish onboarding this machine
+  apply                        Apply the current local Chezmoi source
+  sync                         Fetch safely, apply, and refresh credentials
+  update [options]             Update managed workstation dependencies
+  status [--json] [--repo PATH]
+                               Summarize machine and managed state
+  doctor [--project PATH]      Run deeper workstation and project diagnostics
+  check                        Run the complete dotfiles validation suite
+  config show|edit             Inspect or re-prompt machine configuration
+
+Specialist namespaces:
+  source <command>             Inspect, commit, reconcile, and publish source
+  identity <command>           Manage GitHub identities and agent keys
+  secret <command>             Manage registered application secrets
+  app flow-icons [--public]    Install or refresh Flow Icons
+
+Run `braden-dots <namespace> --help` for specialist commands.
+USAGE
+}
+
+run_module() {
+	local module="$1"
+	shift
+	if [[ ! -x "$LIBEXEC/$module" ]]; then
+		printf '[xx] braden-dots module is missing or not executable: %s\n' \
+			"$LIBEXEC/$module" >&2
+		printf '[--] Run: chezmoi apply\n' >&2
+		return 1
+	fi
+	exec "$LIBEXEC/$module" "$@"
+}
+
+main() {
+	local command="${1:-help}"
+	[[ $# -gt 0 ]] && shift
+	case "$command" in
+	init | apply | sync | status | check | config)
+		run_module core "$command" "$@"
+		;;
+	update) run_module update "$@" ;;
+	doctor) run_module doctor "$@" ;;
+	source) run_module source "$@" ;;
+	identity) run_module identity "$@" ;;
+	secret) run_module secret "$@" ;;
+	app)
+		local app="${1:-}"
+		[[ $# -gt 0 ]] && shift
+		case "$app" in
+		flow-icons) run_module flow-icons "$@" ;;
+		-h | --help | help | "")
+			printf 'Usage: braden-dots app flow-icons [--public]\n'
+			;;
+		*)
+			printf '[xx] unknown braden-dots app: %s\n' "$app" >&2
+			return 2
+			;;
+		esac
+		;;
+	-h | --help | help) usage ;;
+	*)
+		printf '[xx] unknown braden-dots command: %s\n' "$command" >&2
+		usage >&2
+		return 2
+		;;
+	esac
+}
+
+main "$@"

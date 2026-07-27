@@ -13,11 +13,17 @@ address. On a work machine this should be the work email, so an unscoped repo
 commits under the safer default rather than a personal one.
 */}}
 {{- $defaultEmail := promptStringOnce . "defaultEmail" "Default email address (used when no identity scope matches)" (or (get . "defaultEmail") "") -}}
+{{/*
+The login attached to github.com is an explicit machine choice. Additional
+accounts use generated SSH aliases; recording this value prevents a currently
+active `gh` session from accidentally becoming the machine default.
+*/}}
+{{- $defaultGitHubUser := promptStringOnce . "defaultGitHubUser" "GitHub login used by the default github.com SSH route" (or (get . "defaultGitHubUser") "") -}}
 
 {{/*
 Additional git identities are NOT prompted for and are NOT stored here. They
 live in 1Password, one item each, in the vault this machine is configured for,
-and `dotfiles-keys sync` writes them to ~/.config/git. A fixed slot per identity
+and `braden-dots identity sync` writes them to ~/.config/git. A fixed slot per identity
 could only ever hold one of each, and machine-local data would put a work email
 on a personal machine. defaultEmail below is the default when none matches.
 */}}
@@ -25,7 +31,7 @@ on a personal machine. defaultEmail below is the default when none matches.
 {{/*
 Personal machines use the 1Password desktop app to authenticate the CLI. Work
 machines have CLI-only access through a read-only service account. On both
-profiles, `dotfiles-keys load` streams the private keys into the OS ssh-agent;
+profiles, `braden-dots identity ensure` streams missing private keys into the OS ssh-agent;
 the private halves are never written to disk. Work copies expire after a
 bounded lifetime, while personal copies last until logout.
 
@@ -36,7 +42,7 @@ derive the backend from machineType instead, which every config already has.
 */}}
 
 {{/*
-No key material is prompted or stored. `dotfiles-keys sync` writes the public
+No key material is prompted or stored. `braden-dots identity sync` writes the public
 halves to ~/.ssh from the vault, and the templates reference those paths rather
 than embedding the keys. Reading them here via onepasswordRead was rejected
 deliberately: every `chezmoi diff`, `status` and `apply` re-renders, so it would
@@ -62,7 +68,7 @@ personal machine's own reusable keys or unapproved personal secrets. Explicitly
 work-approved application secrets such as Flow Icons may be copied into it,
 because the service account can read every secret placed there.
 
-Either a name or an ID works: dotfiles-keys resolves the name via `op vault get`
+Either a name or an ID works: braden-dots resolves the name via `op vault get`
 before ever building a secret reference, so characters like `<>` that a
 reference would reject (verified against op 2.35.0) cause no trouble here.
 */}}
@@ -86,5 +92,6 @@ should never be asked.
   machineName = {{ $machineName | quote }}
   gitName = {{ $gitName | quote }}
   defaultEmail = {{ $defaultEmail | quote }}
+  defaultGitHubUser = {{ $defaultGitHubUser | quote }}
   opVault = {{ $opVault | quote }}
   opTokenKeychainService = {{ $opTokenKeychainService | quote }}

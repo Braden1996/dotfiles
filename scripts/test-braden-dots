@@ -1,0 +1,673 @@
+#!/usr/bin/env bash
+
+# Exercise the braden-dots facade and source control plane without network or
+# real workstation changes. Source history cases use disposable bare remotes.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+for command_name in "$chezmoi_bin" git jq ssh-keygen; do
+	command -v "$command_name" >/dev/null 2>&1 || {
+		printf '%s is required\n' "$command_name" >&2
+		exit 1
+	}
+done
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/braden-dots-test.XXXXXX")
+cleanup() {
+	local status=$?
+	rm -rf -- "$temp_root"
+	exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+fail() {
+	printf 'FAIL: %s\n' "$*" >&2
+	exit 1
+}
+
+assert_eq() {
+	local expected=$1 actual=$2 message=$3
+	if [[ "$expected" != "$actual" ]]; then
+		printf 'FAIL: %s\n  expected: %s\n  actual:   %s\n' \
+			"$message" "$expected" "$actual" >&2
+		exit 1
+	fi
+}
+
+assert_contains() {
+	local file=$1 text=$2 message=$3
+	grep -Fq -- "$text" "$file" ||
+		fail "$message (missing '$text' in $file)"
+}
+
+assert_json() {
+	local file=$1 filter=$2 message=$3
+	jq -e "$filter" "$file" >/dev/null || fail "$message"
+}
+
+run_test() {
+	local name=$1
+	shift
+	printf 'test: %s ... ' "$name"
+	"$@"
+	printf 'ok\n'
+}
+
+render_suite() {
+	local name=$1 default_github_user=$2
+	RENDER_HOME="$temp_root/render-$name/home"
+	RENDER_LIBEXEC="$RENDER_HOME/.local/libexec/braden-dots"
+	RENDER_BIN="$RENDER_HOME/.local/bin/braden-dots"
+	local config="$temp_root/render-$name/config.toml"
+	mkdir -p "$RENDER_HOME" "$RENDER_LIBEXEC" "$(dirname "$RENDER_BIN")"
+	cat >"$config" <<EOF
+[data]
+  machineType = "$name"
+  machineName = "test-$name"
+  gitName = "Dotfiles Test"
+  defaultEmail = "test@example.com"
+  defaultGitHubUser = "$default_github_user"
+  opVault = "Test Vault"
+  opTokenKeychainService = "test-op-token"
+EOF
+
+	local template output
+	for template in \
+		dot_local/libexec/braden-dots/lib.sh.tmpl \
+		dot_local/libexec/braden-dots/executable_source.tmpl \
+		dot_local/libexec/braden-dots/executable_core.tmpl; do
+		output="${template##*/}"
+		output="${output#executable_}"
+		output="${output%.tmpl}"
+		HOME="$RENDER_HOME" "$chezmoi_bin" execute-template \
+			--config "$config" \
+			--destination "$RENDER_HOME" \
+			--no-tty \
+			--source "$repo_root" \
+			--file "$repo_root/$template" >"$RENDER_LIBEXEC/$output"
+	done
+	HOME="$RENDER_HOME" "$chezmoi_bin" execute-template \
+		--config "$config" \
+		--destination "$RENDER_HOME" \
+		--no-tty \
+		--source "$repo_root" \
+		--file "$repo_root/dot_local/bin/executable_braden-dots.tmpl" >"$RENDER_BIN"
+	chmod +x "$RENDER_BIN" "$RENDER_LIBEXEC/source" "$RENDER_LIBEXEC/core"
+}
+
+render_suite personal Braden1996
+personal_home=$RENDER_HOME
+personal_libexec=$RENDER_LIBEXEC
+personal_bin=$RENDER_BIN
+
+fake_state="$temp_root/fake-state"
+fake_bin="$temp_root/fake-bin"
+mkdir -p "$fake_state" "$fake_bin"
+: >"$fake_state/identity-calls"
+: >"$fake_state/chezmoi-calls"
+: >"$fake_state/check-calls"
+
+cat >"$personal_libexec/identity" <<'FAKE_IDENTITY'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_STATE/identity-calls"
+case "${1:-}" in
+status)
+	shift
+	repo=""
+	while (($# > 0)); do
+		case "$1" in
+		--repo)
+			repo=$2
+			shift 2
+			;;
+		--repo=*)
+			repo=${1#*=}
+			shift
+			;;
+		*) shift ;;
+		esac
+	done
+	jq -n --arg repo "$repo" '{
+	  schemaVersion: 1,
+	  credentials: {
+	    backend: "desktop",
+	    defaultGitHubUser: "Braden1996",
+	    sshAgentReachable: true,
+	    managedKeyCount: 2,
+	    loadedKeyCount: 2,
+	    managedKeysLoaded: true,
+	    workKeyLifetime: null
+	  },
+	  effectiveRepository: (
+	    if $repo == "" then null else {
+	      path: $repo,
+	      author: {name: "Dotfiles Test", email: "test@example.com"},
+	      signingKey: "~/.ssh/id_github_sign.pub",
+	      remote: "git@github.com:Braden1996/dotfiles.git",
+	      sshHost: "github.com",
+	      expectedSshHost: "github.com"
+	    } end
+	  ),
+	  issues: []
+	}'
+	;;
+ensure | sync) ;;
+*) exit 0 ;;
+esac
+FAKE_IDENTITY
+chmod +x "$personal_libexec/identity"
+
+cat >"$fake_bin/chezmoi" <<'FAKE_CHEZMOI'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_STATE/chezmoi-calls"
+case "${1:-}" in
+source-path) printf '%s\n' "$BRADEN_DOTS_SOURCE" ;;
+apply) ;;
+status) printf '%s' "${FAKE_CHEZMOI_STATUS:-}" ;;
+init) ;;
+*) exit 0 ;;
+esac
+FAKE_CHEZMOI
+
+cat >"$fake_bin/secret-check" <<'FAKE_CHECK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'secret %s\n' "$*" >>"$FAKE_STATE/check-calls"
+exit "${SECRET_CHECK_EXIT:-0}"
+FAKE_CHECK
+
+cat >"$fake_bin/fast-check" <<'FAKE_CHECK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'fast %s\n' "$*" >>"$FAKE_STATE/check-calls"
+exit "${FAST_CHECK_EXIT:-0}"
+FAKE_CHECK
+
+cat >"$fake_bin/full-check" <<'FAKE_CHECK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'full %s\n' "$*" >>"$FAKE_STATE/check-calls"
+if [[ -n "${ADVANCE_REPO:-}" ]]; then
+	git -C "$ADVANCE_REPO" pull --ff-only >/dev/null
+	printf 'upstream advanced during validation\n' >"$ADVANCE_REPO/advance.txt"
+	git -C "$ADVANCE_REPO" add advance.txt
+	git -C "$ADVANCE_REPO" -c commit.gpgsign=false \
+		commit -m "advance during validation" >/dev/null
+	git -C "$ADVANCE_REPO" push >/dev/null
+fi
+exit "${FULL_CHECK_EXIT:-0}"
+FAKE_CHECK
+chmod +x "$fake_bin"/*
+
+signing_key="$temp_root/signing-key"
+ssh-keygen -q -t ed25519 -N "" -f "$signing_key"
+allowed_signers="$temp_root/allowed-signers"
+printf 'test@example.com %s\n' "$(<"$signing_key.pub")" >"$allowed_signers"
+
+configure_repo() {
+	local repo=$1
+	git -C "$repo" config user.name "Dotfiles Test"
+	git -C "$repo" config user.email "test@example.com"
+	git -C "$repo" config gpg.format ssh
+	git -C "$repo" config user.signingkey "$signing_key"
+	git -C "$repo" config gpg.ssh.allowedSignersFile "$allowed_signers"
+	git -C "$repo" config commit.gpgsign true
+}
+
+new_fixture() {
+	local name=$1
+	FIXTURE_ROOT="$temp_root/fixtures/$name"
+	FIXTURE_REMOTE="$FIXTURE_ROOT/remote.git"
+	FIXTURE_LOCAL="$FIXTURE_ROOT/local"
+	FIXTURE_UPSTREAM="$FIXTURE_ROOT/upstream"
+	local seed="$FIXTURE_ROOT/seed"
+	mkdir -p "$FIXTURE_ROOT"
+	git init -q --bare "$FIXTURE_REMOTE"
+	git init -q -b master "$seed"
+	git -C "$seed" config user.name "Fixture"
+	git -C "$seed" config user.email "fixture@example.com"
+	printf 'base\n' >"$seed/base.txt"
+	git -C "$seed" add base.txt
+	git -C "$seed" -c commit.gpgsign=false commit -m base >/dev/null
+	git -C "$seed" remote add origin "$FIXTURE_REMOTE"
+	git -C "$seed" push -u origin master >/dev/null
+	git --git-dir="$FIXTURE_REMOTE" symbolic-ref HEAD refs/heads/master
+	git clone -q "$FIXTURE_REMOTE" "$FIXTURE_LOCAL"
+	git clone -q "$FIXTURE_REMOTE" "$FIXTURE_UPSTREAM"
+	configure_repo "$FIXTURE_LOCAL"
+	configure_repo "$FIXTURE_UPSTREAM"
+}
+
+commit_unsigned() {
+	local repo=$1 file=$2 contents=$3 message=$4
+	printf '%s\n' "$contents" >"$repo/$file"
+	git -C "$repo" add "$file"
+	git -C "$repo" -c commit.gpgsign=false commit -m "$message" >/dev/null
+}
+
+run_source() {
+	env \
+		HOME="$personal_home" \
+		FAKE_STATE="$fake_state" \
+		BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SOURCE_ORIGIN_OVERRIDE="$FIXTURE_REMOTE" \
+		BRADEN_DOTS_CHEZMOI="$fake_bin/chezmoi" \
+		BRADEN_DOTS_IDENTITY_COMMAND="$personal_libexec/identity" \
+		BRADEN_DOTS_SECRET_SCAN_COMMAND="$fake_bin/secret-check" \
+		BRADEN_DOTS_FAST_CHECK_COMMAND="$fake_bin/fast-check" \
+		BRADEN_DOTS_FULL_CHECK_COMMAND="$fake_bin/full-check" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		FULL_CHECK_EXIT="${FULL_CHECK_EXIT:-0}" \
+		FAST_CHECK_EXIT="${FAST_CHECK_EXIT:-0}" \
+		SECRET_CHECK_EXIT="${SECRET_CHECK_EXIT:-0}" \
+		ADVANCE_REPO="${ADVANCE_REPO:-}" \
+		"$personal_libexec/source" "$@"
+}
+
+run_core() {
+	env \
+		HOME="$personal_home" \
+		FAKE_STATE="$fake_state" \
+		BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SOURCE_ORIGIN_OVERRIDE="$FIXTURE_REMOTE" \
+		BRADEN_DOTS_CHEZMOI="$fake_bin/chezmoi" \
+		BRADEN_DOTS_IDENTITY_COMMAND="$personal_libexec/identity" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		"$personal_libexec/core" "$@"
+}
+
+worktree_fingerprint() {
+	local repo=$1 path
+	git -C "$repo" status --porcelain=v1 --untracked-files=all
+	git -C "$repo" diff --binary | git hash-object --stdin
+	git -C "$repo" diff --cached --binary | git hash-object --stdin
+	while IFS= read -r path; do
+		printf '%s %s\n' "$(git -C "$repo" hash-object -- "$path")" "$path"
+	done < <(git -C "$repo" ls-files --cached --others --exclude-standard | sort)
+}
+
+test_dispatch_and_shims() {
+	local libexec="$temp_root/dispatch/libexec" module output status
+	local dispatch_log="$temp_root/dispatch/log"
+	mkdir -p "$libexec"
+	: >"$dispatch_log"
+	for module in core source identity secret update doctor flow-icons; do
+		cat >"$libexec/$module" <<'FAKE_MODULE'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$(basename "$0")" "$*" >>"$DISPATCH_LOG"
+exit "${MODULE_EXIT:-0}"
+FAKE_MODULE
+		chmod +x "$libexec/$module"
+	done
+
+	DISPATCH_LOG="$dispatch_log" BRADEN_DOTS_LIBEXEC="$libexec" \
+		"$personal_bin" status --json
+	DISPATCH_LOG="$dispatch_log" BRADEN_DOTS_LIBEXEC="$libexec" \
+		"$personal_bin" source diff
+	DISPATCH_LOG="$dispatch_log" BRADEN_DOTS_LIBEXEC="$libexec" \
+		"$personal_bin" app flow-icons --public
+	assert_contains "$dispatch_log" 'core|status --json' \
+		"status should dispatch through core"
+	assert_contains "$dispatch_log" 'source|diff' \
+		"source arguments should be forwarded"
+	assert_contains "$dispatch_log" 'flow-icons|--public' \
+		"app arguments should be forwarded"
+
+	status=0
+	DISPATCH_LOG="$dispatch_log" MODULE_EXIT=7 BRADEN_DOTS_LIBEXEC="$libexec" \
+		"$personal_bin" doctor >/dev/null 2>&1 || status=$?
+	assert_eq 7 "$status" "module exit status should propagate"
+	status=0
+	BRADEN_DOTS_LIBEXEC="$libexec" "$personal_bin" unknown >/dev/null 2>&1 ||
+		status=$?
+	assert_eq 2 "$status" "unknown commands should return usage status"
+
+	local fake_master="$temp_root/dispatch/fake-master"
+	cat >"$fake_master" <<'FAKE_MASTER'
+#!/usr/bin/env bash
+printf '%s\n' "$*"
+[[ "$*" == "secret read flow-icons" ]] && printf 'fixture-value\n'
+exit 0
+FAKE_MASTER
+	chmod +x "$fake_master"
+	output="$temp_root/dispatch/shim-out"
+	local error="$temp_root/dispatch/shim-err"
+	BRADEN_DOTS_BIN="$fake_master" \
+		bash "$repo_root/dot_local/bin/executable_dotfiles-secrets" \
+		read flow-icons >"$output" 2>"$error"
+	assert_contains "$output" 'secret read flow-icons' \
+		"secret shim should preserve arguments"
+	if grep -Fq warning "$output"; then
+		fail "compatibility warning leaked onto stdout"
+	fi
+	assert_contains "$error" 'deprecated' \
+		"compatibility warning should be written to stderr"
+
+	BRADEN_DOTS_BIN="$fake_master" \
+		bash "$repo_root/dot_local/bin/executable_dotfiles-keys" status \
+		>"$output" 2>"$error"
+	assert_contains "$output" 'identity status' \
+		"identity shim should preserve arguments"
+}
+
+test_dirty_sync_preserves_source() {
+	new_fixture dirty-sync
+	printf 'staged\n' >"$FIXTURE_LOCAL/staged.txt"
+	git -C "$FIXTURE_LOCAL" add staged.txt
+	printf 'staged plus unstaged\n' >"$FIXTURE_LOCAL/staged.txt"
+	printf 'untracked\n' >"$FIXTURE_LOCAL/untracked.txt"
+	printf 'local edit\n' >>"$FIXTURE_LOCAL/base.txt"
+	local before after index_before index_after head_before
+	before="$(worktree_fingerprint "$FIXTURE_LOCAL")"
+	index_before="$(git -C "$FIXTURE_LOCAL" hash-object .git/index)"
+	head_before="$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)"
+	run_core sync >"$FIXTURE_ROOT/sync-output"
+	after="$(worktree_fingerprint "$FIXTURE_LOCAL")"
+	index_after="$(git -C "$FIXTURE_LOCAL" hash-object .git/index)"
+	assert_eq "$before" "$after" "dirty sync must preserve working and staged state"
+	assert_eq "$index_before" "$index_after" "dirty sync must preserve index bytes"
+	assert_eq "$head_before" "$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"dirty sync must not rewrite HEAD"
+	assert_contains "$FIXTURE_ROOT/sync-output" \
+		'without staging, stashing, committing, or rewriting' \
+		"dirty sync should explain its preservation guarantee"
+}
+
+test_clean_sync_relationships() {
+	new_fixture clean-behind
+	commit_unsigned "$FIXTURE_UPSTREAM" upstream.txt remote "remote"
+	git -C "$FIXTURE_UPSTREAM" push >/dev/null
+	run_core sync >/dev/null
+	assert_eq "$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)" \
+		"$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"clean behind source should fast-forward"
+
+	new_fixture clean-ahead
+	commit_unsigned "$FIXTURE_LOCAL" local.txt local "local"
+	local head_before remote_before
+	head_before="$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)"
+	remote_before="$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)"
+	run_core sync >/dev/null
+	assert_eq "$head_before" "$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"clean ahead source should be left alone"
+	assert_eq "$remote_before" "$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)" \
+		"sync must not publish local commits"
+
+	new_fixture clean-diverged
+	commit_unsigned "$FIXTURE_LOCAL" local.txt local "local"
+	commit_unsigned "$FIXTURE_UPSTREAM" remote.txt remote "remote"
+	git -C "$FIXTURE_UPSTREAM" push >/dev/null
+	head_before="$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)"
+	run_core sync >"$FIXTURE_ROOT/diverged-output" 2>&1
+	assert_eq "$head_before" "$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"routine sync must not reconcile divergence"
+	assert_contains "$FIXTURE_ROOT/diverged-output" 'source diverged' \
+		"routine sync should report divergence"
+}
+
+test_commit_modes_and_signing() {
+	new_fixture commit-all
+	printf 'changed\n' >>"$FIXTURE_LOCAL/base.txt"
+	printf 'added\n' >"$FIXTURE_LOCAL/added.txt"
+	printf 'delete me\n' >"$FIXTURE_LOCAL/deleted.txt"
+	git -C "$FIXTURE_LOCAL" add deleted.txt
+	git -C "$FIXTURE_LOCAL" -c commit.gpgsign=false commit -m "add deletion target" >/dev/null
+	rm "$FIXTURE_LOCAL/deleted.txt"
+	run_source commit -m "capture complete source state" >/dev/null
+	[[ -z "$(git -C "$FIXTURE_LOCAL" status --porcelain)" ]] ||
+		fail "default source commit should include additions, deletions, and untracked files"
+	git -C "$FIXTURE_LOCAL" verify-commit HEAD >/dev/null
+	assert_contains "$fake_state/check-calls" 'secret ' \
+		"source commit should run secret scanning"
+	assert_contains "$fake_state/check-calls" 'fast ' \
+		"source commit should run fast validation"
+
+	new_fixture commit-staged
+	printf 'selected\n' >"$FIXTURE_LOCAL/selected.txt"
+	git -C "$FIXTURE_LOCAL" add selected.txt
+	printf 'leave local\n' >"$FIXTURE_LOCAL/unselected.txt"
+	run_source commit --staged -m "commit selected source state" >/dev/null
+	git -C "$FIXTURE_LOCAL" show --name-only --format= HEAD |
+		grep -Fxq selected.txt || fail "--staged should commit the staged selection"
+	[[ -f "$FIXTURE_LOCAL/unselected.txt" ]] ||
+		fail "--staged should preserve unselected work"
+
+	new_fixture commit-message
+	printf 'message required\n' >"$FIXTURE_LOCAL/new.txt"
+	if run_source commit >/dev/null 2>&1; then
+		fail "non-interactive commit without -m should fail"
+	fi
+	[[ -z "$(git -C "$FIXTURE_LOCAL" diff --cached --name-only)" ]] ||
+		fail "message validation should happen before automatic staging"
+}
+
+test_reconcile_continue_and_abort() {
+	new_fixture reconcile
+	commit_unsigned "$FIXTURE_LOCAL" local.txt local "local"
+	commit_unsigned "$FIXTURE_UPSTREAM" remote.txt remote "remote"
+	git -C "$FIXTURE_UPSTREAM" push >/dev/null
+	run_source reconcile >/dev/null
+	git -C "$FIXTURE_LOCAL" merge-base --is-ancestor \
+		origin/master HEAD || fail "reconcile should rebase local commits onto upstream"
+	[[ -n "$(git -C "$FIXTURE_LOCAL" for-each-ref \
+		--format='%(refname)' refs/braden-dots/backups/)" ]] ||
+		fail "reconcile should create a recoverable backup ref"
+
+	new_fixture conflict-continue
+	printf 'local\n' >"$FIXTURE_LOCAL/base.txt"
+	git -C "$FIXTURE_LOCAL" add base.txt
+	git -C "$FIXTURE_LOCAL" -c commit.gpgsign=false commit -m local >/dev/null
+	printf 'remote\n' >"$FIXTURE_UPSTREAM/base.txt"
+	git -C "$FIXTURE_UPSTREAM" add base.txt
+	git -C "$FIXTURE_UPSTREAM" -c commit.gpgsign=false commit -m remote >/dev/null
+	git -C "$FIXTURE_UPSTREAM" push >/dev/null
+	if run_source reconcile >/dev/null 2>&1; then
+		fail "real content conflict should stop reconciliation"
+	fi
+	run_source conflicts >"$FIXTURE_ROOT/conflicts"
+	assert_contains "$FIXTURE_ROOT/conflicts" base.txt \
+		"conflicts should list only unmerged paths"
+	printf 'resolved\n' >"$FIXTURE_LOCAL/base.txt"
+	run_source continue >/dev/null
+	[[ "$(cat "$FIXTURE_LOCAL/base.txt")" == resolved ]] ||
+		fail "continued rebase should retain the explicit resolution"
+	if git -C "$FIXTURE_LOCAL" status | grep -q 'rebase in progress'; then
+		fail "continue should complete the resolved rebase"
+	fi
+
+	new_fixture conflict-abort
+	printf 'local\n' >"$FIXTURE_LOCAL/base.txt"
+	git -C "$FIXTURE_LOCAL" add base.txt
+	git -C "$FIXTURE_LOCAL" -c commit.gpgsign=false commit -m local >/dev/null
+	local original_head
+	original_head="$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)"
+	printf 'remote\n' >"$FIXTURE_UPSTREAM/base.txt"
+	git -C "$FIXTURE_UPSTREAM" add base.txt
+	git -C "$FIXTURE_UPSTREAM" -c commit.gpgsign=false commit -m remote >/dev/null
+	git -C "$FIXTURE_UPSTREAM" push >/dev/null
+	run_source reconcile >/dev/null 2>&1 && fail "conflict fixture should stop"
+	run_source abort >/dev/null
+	assert_eq "$original_head" "$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"abort should restore the pre-rebase commit"
+}
+
+test_publish_guards() {
+	new_fixture publish
+	printf 'publish\n' >"$FIXTURE_LOCAL/publish.txt"
+	run_source publish -m "publish source state" >/dev/null
+	assert_eq "$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)" \
+		"$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)" \
+		"publish should push the reconciled result"
+	: >"$fake_state/check-calls"
+	run_source publish >"$FIXTURE_ROOT/noop-output"
+	if grep -q '^full ' "$fake_state/check-calls"; then
+		fail "no-op publish should not rerun the complete check"
+	fi
+	assert_contains "$FIXTURE_ROOT/noop-output" 'nothing to publish' \
+		"no-op publish should be explicit"
+
+	new_fixture publish-check-failure
+	commit_unsigned "$FIXTURE_LOCAL" local.txt local "local"
+	local remote_before
+	remote_before="$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)"
+	if FULL_CHECK_EXIT=9 run_source publish >/dev/null 2>&1; then
+		fail "failed complete validation must prevent push"
+	fi
+	assert_eq "$remote_before" "$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)" \
+		"check failure should leave reviewed commits local"
+
+	new_fixture publish-rejected
+	commit_unsigned "$FIXTURE_LOCAL" local.txt local "local"
+	if ADVANCE_REPO="$FIXTURE_UPSTREAM" run_source publish \
+		>"$FIXTURE_ROOT/rejected-output" 2>&1; then
+		fail "upstream advance during validation should reject normal push"
+	fi
+	local remote_tip local_tip
+	remote_tip="$(git --git-dir="$FIXTURE_REMOTE" rev-parse master)"
+	local_tip="$(git -C "$FIXTURE_LOCAL" rev-parse HEAD)"
+	[[ "$remote_tip" != "$local_tip" ]] ||
+		fail "rejected push must not force-overwrite the upstream advance"
+	assert_contains "$FIXTURE_ROOT/rejected-output" \
+		'no force push was attempted' \
+		"push rejection should state the safe recovery behavior"
+}
+
+test_remote_selection_and_json() {
+	new_fixture remote-personal
+	unset BRADEN_DOTS_SOURCE_ORIGIN_OVERRIDE
+	env HOME="$personal_home" BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		"$personal_libexec/source" remote --fix >/dev/null
+	assert_eq 'git@github.com:Braden1996/dotfiles.git' \
+		"$(git -C "$FIXTURE_LOCAL" config --get remote.origin.url)" \
+		"source should use github.com when Braden1996 is the default"
+
+	render_suite work isembard-managed
+	local work_home=$RENDER_HOME work_source=$RENDER_LIBEXEC/source
+	mkdir -p "$work_home/.config/git/identities" "$work_home/.ssh/config.d"
+	cat >"$work_home/.config/git/identities.gitconfig" <<EOF
+[includeIf "hasconfig:remote.*.url:git@github.com:Braden1996/**"]
+	path = $work_home/.config/git/identities/personal.gitconfig
+EOF
+	printf 'public fixture\n' >"$work_home/.ssh/id_github_auth_personal.pub"
+	printf 'Host github-personal\n  HostName github.com\n' \
+		>"$work_home/.ssh/config.d/10-personal.conf"
+	new_fixture remote-work
+	env HOME="$work_home" BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		"$work_source" remote --fix >/dev/null
+	assert_eq 'git@github-personal:Braden1996/dotfiles.git' \
+		"$(git -C "$FIXTURE_LOCAL" config --get remote.origin.url)" \
+		"source should use the scoped alias when another account is default"
+
+	render_suite personal ""
+	local missing_home=$RENDER_HOME missing_source=$RENDER_LIBEXEC/source
+	new_fixture remote-missing
+	if env HOME="$missing_home" BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		"$missing_source" remote --fix >/dev/null 2>&1; then
+		fail "missing defaultGitHubUser should require config edit"
+	fi
+	env HOME="$missing_home" BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		"$missing_source" status --json >"$FIXTURE_ROOT/missing.json"
+	assert_json "$FIXTURE_ROOT/missing.json" \
+		'.schemaVersion == 1 and (.issues | index("default_github_user_missing"))' \
+		"source JSON should version and code missing identity state"
+
+	new_fixture structured-status
+	run_core status --repo "$FIXTURE_LOCAL" --json >"$FIXTURE_ROOT/status.json"
+	assert_json "$FIXTURE_ROOT/status.json" \
+		'.schemaVersion == 1
+		 and .machine.profile == "personal"
+		 and .source.branch == "master"
+		 and .managedState.drifted == false
+		 and .credentials.managedKeysLoaded == true
+		 and .effectiveRepository.author.email == "test@example.com"
+		 and (.issues | type == "array")' \
+		"top-level JSON should expose the stable structured contract"
+	if grep -Eq 'PRIVATE KEY|fixture-value|OP_SERVICE_ACCOUNT_TOKEN' \
+		"$FIXTURE_ROOT/status.json"; then
+		fail "structured status must not expose sensitive values"
+	fi
+}
+
+test_update_preserves_dirty_source() {
+	new_fixture update
+	mkdir -p "$FIXTURE_LOCAL/dot_config/mise" "$temp_root/update-home/.config/mise"
+	printf 'source lock\n' >"$FIXTURE_LOCAL/dot_config/mise/mise.lock"
+	printf 'target lock\n' >"$temp_root/update-home/.config/mise/mise.lock"
+	printf 'preexisting\n' >"$FIXTURE_LOCAL/preexisting.txt"
+
+	local update_bin="$repo_root/dot_local/libexec/braden-dots/executable_update"
+	local update_fake="$temp_root/update-fake"
+	mkdir -p "$update_fake"
+	cat >"$update_fake/braden-dots" <<'FAKE_DOTS'
+#!/usr/bin/env bash
+case "${1:-}" in
+status | doctor | sync | apply) exit 0 ;;
+*) exit 0 ;;
+esac
+FAKE_DOTS
+	cat >"$update_fake/chezmoi" <<'FAKE_CHEZMOI'
+#!/usr/bin/env bash
+case "${1:-}" in
+source-path) printf '%s\n' "$BRADEN_DOTS_SOURCE" ;;
+re-add)
+	printf 'generated lock\n' >>"$BRADEN_DOTS_SOURCE/dot_config/mise/mise.lock"
+	;;
+*) exit 0 ;;
+esac
+FAKE_CHEZMOI
+	cat >"$update_fake/mise" <<'FAKE_MISE'
+#!/usr/bin/env bash
+exit 0
+FAKE_MISE
+	cat >"$update_fake/uname" <<'FAKE_UNAME'
+#!/usr/bin/env bash
+printf 'Linux\n'
+FAKE_UNAME
+	chmod +x "$update_fake"/*
+
+	local before
+	before="$(worktree_fingerprint "$FIXTURE_LOCAL")"
+	env HOME="$temp_root/update-home" \
+		PATH="$update_fake:/usr/bin:/bin" \
+		BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_BIN="$update_fake/braden-dots" \
+		BRADEN_DOTS_CHEZMOI="$update_fake/chezmoi" \
+		BRADEN_DOTS_MISE="$update_fake/mise" \
+		bash "$update_bin" --check >/dev/null
+	assert_eq "$before" "$(worktree_fingerprint "$FIXTURE_LOCAL")" \
+		"update --check must not mutate source"
+
+	env HOME="$temp_root/update-home" \
+		PATH="$update_fake:/usr/bin:/bin" \
+		BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" \
+		BRADEN_DOTS_BIN="$update_fake/braden-dots" \
+		BRADEN_DOTS_CHEZMOI="$update_fake/chezmoi" \
+		BRADEN_DOTS_MISE="$update_fake/mise" \
+		bash "$update_bin" >"$FIXTURE_ROOT/update-output" 2>&1
+	[[ -f "$FIXTURE_LOCAL/preexisting.txt" ]] ||
+		fail "update should preserve preexisting dirty source"
+	assert_contains "$FIXTURE_ROOT/update-output" \
+		'update changed source file: dot_config/mise/mise.lock' \
+		"update should report generated source changes"
+	assert_contains "$FIXTURE_ROOT/update-output" 'nothing was committed' \
+		"update should make commit responsibility explicit"
+}
+
+run_test "facade dispatch and stderr-only shims" test_dispatch_and_shims
+run_test "dirty sync preserves worktree and index" test_dirty_sync_preserves_source
+run_test "clean sync handles behind, ahead, and divergence" test_clean_sync_relationships
+run_test "source commit modes and signing" test_commit_modes_and_signing
+run_test "reconcile, continue, and abort" test_reconcile_continue_and_abort
+run_test "publish validation and normal-push guards" test_publish_guards
+run_test "remote selection and structured JSON" test_remote_selection_and_json
+run_test "update check and dirty-source preservation" test_update_preserves_dirty_source
+
+printf 'all braden-dots control-plane tests passed\n'

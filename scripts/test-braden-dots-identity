@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Behaviorally exercise the helper without talking to 1Password, GitHub, the
+# Behaviorally exercise `braden-dots identity` without talking to 1Password, GitHub, the
 # Keychain, or a real ssh-agent. The helper is rendered exactly as it is for a
 # machine; only its external commands are replaced with stateful fakes.
 
@@ -520,6 +520,7 @@ chmod +x "$fake_bin/op" "$fake_bin/gh" "$fake_bin/ssh-add" \
 
 render_helper() {
 	local profile=$1 machine=$2 vault=$3 output=$4
+	local default_github_user=${5-default-account}
 	local home_dir="$temp_root/home-$profile"
 	local config_file="$temp_root/config-$profile.toml"
 	mkdir -p "$home_dir"
@@ -529,6 +530,7 @@ render_helper() {
   machineName = "$machine"
   gitName = "Dotfiles Test"
   defaultEmail = "default@example.com"
+  defaultGitHubUser = "$default_github_user"
   opVault = "$vault"
   opTokenKeychainService = "dotfiles-test-token"
 EOF
@@ -538,16 +540,18 @@ EOF
 		--destination "$home_dir" \
 		--no-tty \
 		--source "$repo_root" \
-		--file "$repo_root/dot_local/bin/executable_dotfiles-keys.tmpl" >"$output"
+		--file "$repo_root/dot_local/libexec/braden-dots/executable_identity.tmpl" >"$output"
 	chmod +x "$output"
 }
 
 personal_helper="$temp_root/dotfiles-keys-personal"
 work_helper="$temp_root/dotfiles-keys-work"
 unsafe_machine_helper="$temp_root/dotfiles-keys-unsafe"
+missing_identity_helper="$temp_root/dotfiles-keys-missing-identity"
 render_helper personal ci-personal "Configured Vault" "$personal_helper"
 render_helper work ci-work "Target<>Vault" "$work_helper"
 render_helper personal "ci work" "Configured Vault" "$unsafe_machine_helper"
+render_helper personal ci-missing "Configured Vault" "$missing_identity_helper" ""
 
 run_helper() {
 	local helper=$1
@@ -1049,6 +1053,68 @@ test_publish_failure_is_nonzero() {
 		"provision should publish signing first to avoid an auth-only setup"
 }
 
+test_status_json_and_expired_key_recovery() {
+	new_case structured-status
+	local work_home status_json repo
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	run_helper "$work_helper" sync >/dev/null
+	work_home="$temp_root/home-work"
+
+	status_json="$FAKE_STATE/status.json"
+	run_helper "$work_helper" status --json >"$status_json"
+	jq -e '
+		.schemaVersion == 1
+		and .machine.profile == "work"
+		and .credentials.backend == "service-account"
+		and .credentials.defaultGitHubUser == "default-account"
+		and .credentials.workKeyLifetime == "9h"
+		and (.issues | index("agent_keys_missing"))
+	' "$status_json" >/dev/null ||
+		fail "identity status JSON should be versioned and code expired keys"
+	if grep -Fq 'TEST-base-' "$status_json"; then
+		fail "identity status JSON must not include public-key bodies"
+	fi
+
+	: >"$FAKE_STATE/ssh-adds"
+	if run_helper "$work_helper" ensure >/dev/null 2>&1; then
+		fail "the stateless fake agent should remain missing after reload"
+	fi
+	assert_eq 2 "$(wc -l <"$FAKE_STATE/ssh-adds" | tr -d ' ')" \
+		"ensure should reload both expired work keys"
+	if awk -F'|' '$1 != "-t 9h -" { exit 1 }' "$FAKE_STATE/ssh-adds"; then
+		:
+	else
+		fail "ensure should preserve the nine-hour work-key expiry"
+	fi
+
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	git -C "$repo" config user.name "Scoped Author"
+	git -C "$repo" config user.email "scoped@example.com"
+	# Git expands this configured path; the shell must preserve the literal tilde.
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey "~/.ssh/id_github_sign.pub"
+	git -C "$repo" remote add origin https://github.com/Braden1996/dotfiles.git
+	run_helper "$work_helper" status --repo "$repo" --json >"$status_json"
+	jq -e '
+		.effectiveRepository.author.email == "scoped@example.com"
+		and .effectiveRepository.sshHost == null
+		and (.issues | index("remote_identity_mismatch"))
+	' "$status_json" >/dev/null ||
+		fail "repo-aware identity JSON should diagnose HTTPS route mismatch"
+
+	new_case missing-default-identity
+	status_json="$FAKE_STATE/missing.json"
+	PATH="$fake_bin:$PATH" HOME="$temp_root/home-personal" \
+		"$missing_identity_helper" status --json >"$status_json"
+	jq -e '.issues | index("default_github_user_missing")' \
+		"$status_json" >/dev/null ||
+		fail "missing default GitHub identity should have a stable issue code"
+}
+
 run_test() {
 	local name=$1
 	shift
@@ -1078,5 +1144,6 @@ run_test "partial pair preserves routing" test_partial_pair_preserves_routing
 run_test "invalid snapshots preserve routing" test_duplicate_and_field_failure_preserve_routing
 run_test "load rejects duplicate account pair" test_load_rejects_duplicate_account_pair
 run_test "publish failure is nonzero" test_publish_failure_is_nonzero
+run_test "structured status and expired-key recovery" test_status_json_and_expired_key_recovery
 
-printf 'all dotfiles-keys tests passed\n'
+printf 'all braden-dots identity tests passed\n'

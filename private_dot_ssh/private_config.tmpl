@@ -14,12 +14,12 @@ unsafe direction for exactly the profile this design protects.
 # Managed by chezmoi. Private keys are never written here or anywhere else on
 # disk: an agent holds them, and this file only ever names public halves.
 #
-# The public key is written by `dotfiles-keys sync` from the vault, not
+# The public key is written by `braden-dots identity sync` from the vault, not
 # templated from chezmoi data. Key material has exactly one source of truth.
 #
 # credentialBackend = {{ $backend }}
 #
-# Both profiles use the OS ssh-agent, filled by `dotfiles-keys load` from
+# Both profiles use the OS ssh-agent, filled by `braden-dots identity ensure` from
 # 1Password. The 1Password SSH agent is deliberately NOT used: it asks approval
 # per client, which no unattended process can answer, so it would block agent
 # harnesses and CI from pushing or signing. 1Password is the source of truth
@@ -27,7 +27,7 @@ unsafe direction for exactly the profile this design protects.
 
 {{/*
 Included first so a per-account alias wins: ssh takes the first value it sees
-for each keyword. These blocks are written by `dotfiles-keys sync` from the
+for each keyword. These blocks are written by `braden-dots identity sync` from the
 vault, because only it knows which identities own credentials.
 */}}
 Include ~/.ssh/config.d/*.conf
@@ -39,7 +39,7 @@ Host github.com
   # Public half only. The agent holds the private key and performs the signature.
   IdentityFile ~/.ssh/id_github_auth.pub
   # Only restrict identities once one is actually configured, otherwise this
-  # would offer nothing at all before `dotfiles-keys sync` has run.
+  # would offer nothing at all before `braden-dots identity sync` has run.
   IdentitiesOnly yes
 {{- end }}
 {{- if and (eq $backend "desktop") (stat $localKey) }}

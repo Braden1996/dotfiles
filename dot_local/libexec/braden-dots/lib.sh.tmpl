@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# Shared, non-secret machine coordinates for braden-dots modules.
+readonly DOTS_PROFILE={{ .machineType | quote }}
+readonly DOTS_MACHINE={{ .machineName | quote }}
+readonly DOTS_GIT_NAME={{ .gitName | quote }}
+readonly DOTS_DEFAULT_EMAIL={{ .defaultEmail | quote }}
+readonly DOTS_DEFAULT_GITHUB_USER={{ get . "defaultGitHubUser" | default "" | quote }}
+readonly DOTS_CREDENTIAL_BACKEND={{ ternary "service-account" "desktop" (eq .machineType "work") | quote }}
+readonly DOTS_SOURCE_OWNER={{ .dotfilesSource.owner | quote }}
+readonly DOTS_SOURCE_REPOSITORY={{ .dotfilesSource.repository | quote }}
+readonly DOTS_PRIMARY_BRANCH={{ .dotfilesSource.primaryBranch | quote }}
+
+readonly DOTS_CHEZMOI=${BRADEN_DOTS_CHEZMOI:-chezmoi}
+readonly DOTS_MISE=${BRADEN_DOTS_MISE:-mise}
+readonly DOTS_BIN=${BRADEN_DOTS_BIN:-braden-dots}
+
+dots_pass() { printf '[ok] %s\n' "$*"; }
+dots_warn() { printf '[!!] %s\n' "$*" >&2; }
+dots_fail() { printf '[xx] %s\n' "$*" >&2; }
+dots_note() { printf '[--] %s\n' "$*"; }
+
+dots_require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    dots_fail "$1 is required but not installed"
+    return 1
+  fi
+}
+
+dots_source_path() {
+  if [[ -n "${BRADEN_DOTS_SOURCE:-}" ]]; then
+    printf '%s\n' "$BRADEN_DOTS_SOURCE"
+  else
+    "$DOTS_CHEZMOI" source-path
+  fi
+}
+
+dots_require_source() {
+  local source
+  source="$(dots_source_path)" || return 1
+  if [[ ! -d "$source" ]]; then
+    dots_fail "Chezmoi source does not exist: $source"
+    return 1
+  fi
+  if ! git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    dots_fail "Chezmoi source is not a Git worktree: $source"
+    return 1
+  fi
+  printf '%s\n' "$source"
+}
+
+dots_normalize_login() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+dots_default_identity_is_source_owner() {
+  [[ -n "$DOTS_DEFAULT_GITHUB_USER" ]] &&
+    [[ "$(dots_normalize_login "$DOTS_DEFAULT_GITHUB_USER")" == "$(dots_normalize_login "$DOTS_SOURCE_OWNER")" ]]
+}
+
+# Print the generated identity slug whose scope owns the dotfiles repository.
+# The include file is a runtime projection from 1Password; no secret values are
+# present in it.
+dots_source_identity_slug() {
+  local include_file="${BRADEN_DOTS_IDENTITY_INCLUDE:-$HOME/.config/git/identities.gitconfig}"
+  [[ -r "$include_file" ]] || return 1
+
+  local path
+  path="$(
+    awk -v owner="$DOTS_SOURCE_OWNER" -v repository="$DOTS_SOURCE_REPOSITORY" '
+      BEGIN {
+        owner = tolower(owner)
+        repository = tolower(repository)
+      }
+      /^\[includeIf / {
+        line = tolower($0)
+        wanted = index(line, "github.com:" owner "/**") || index(line, "github.com/" owner "/**") || index(line, "github.com:" owner "/" repository) || index(line, "github.com/" owner "/" repository)
+        next
+      }
+      wanted && /^[[:space:]]*path[[:space:]]*=/ {
+        sub(/^[[:space:]]*path[[:space:]]*=[[:space:]]*/, "")
+        print
+        exit
+      }
+    ' "$include_file"
+  )"
+  [[ -n "$path" ]] || return 1
+  path="${path##*/}"
+  path="${path%.gitconfig}"
+  [[ -n "$path" ]] || return 1
+  printf '%s\n' "$path"
+}
+
+dots_source_ssh_host() {
+  if dots_default_identity_is_source_owner; then
+    printf 'github.com\n'
+    return 0
+  fi
+
+  local slug
+  slug="$(dots_source_identity_slug)" || return 1
+  local ssh_dir="${BRADEN_DOTS_SSH_DIR:-$HOME/.ssh}"
+  if [[ ! -r "$ssh_dir/id_github_auth_$slug.pub" ]] ||
+    [[ ! -r "$ssh_dir/config.d/10-$slug.conf" ]] ||
+    ! awk -v host="github-$slug" '
+        $1 == "Host" {
+          for (field = 2; field <= NF; field++) {
+            if ($field == host) found = 1
+          }
+        }
+        END { exit !found }
+      ' "$ssh_dir/config.d/10-$slug.conf"; then
+    return 1
+  fi
+  printf 'github-%s\n' "$slug"
+}
+
+dots_recommended_origin() {
+  if [[ -n "${BRADEN_DOTS_SOURCE_ORIGIN_OVERRIDE:-}" ]]; then
+    printf '%s\n' "$BRADEN_DOTS_SOURCE_ORIGIN_OVERRIDE"
+    return 0
+  fi
+  local host
+  host="$(dots_source_ssh_host)" || return 1
+  printf 'git@%s:%s/%s.git\n' \
+    "$host" "$DOTS_SOURCE_OWNER" "$DOTS_SOURCE_REPOSITORY"
+}
+
+dots_run_mise_task() {
+  local source="$1" task="$2"
+  (
+    cd "$source" || exit 1
+    "$DOTS_MISE" run "$task"
+  )
+}
+
+dots_issue_json() {
+  if (($# == 0)); then
+    printf '[]\n'
+    return 0
+  fi
+  printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))'
+}

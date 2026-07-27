@@ -19,10 +19,9 @@ use different vaults.
 ## Personal machine
 
 ```sh
-dotfiles-keys setup
-chezmoi diff && chezmoi apply
-dotfiles-keys status
-ssh -T git@github.com
+braden-dots init
+braden-dots identity status --repo .
+braden-dots identity test
 ```
 
 `setup` creates the machine’s authentication and signing keys in 1Password,
@@ -36,18 +35,18 @@ work vault:
 
 ```sh
 gh auth switch -h github.com -u <github-login>
-dotfiles-keys provision <work-machine> \
+braden-dots identity provision <work-machine> \
   --vault '<work-vault-id>' \
   --github-user <github-login>
 ```
 
-On the work Mac, use the same machine name during `chezmoi init`, then:
+On the work Mac, use the same machine name during the initial Chezmoi
+bootstrap, then:
 
 ```sh
-dotfiles-keys store-token
-dotfiles-keys setup
-chezmoi diff && chezmoi apply
-dotfiles-keys status
+braden-dots identity store-token
+braden-dots init
+braden-dots identity status
 ```
 
 The work service account is read-only. `setup` therefore syncs and loads the
@@ -58,7 +57,7 @@ pair provisioned above rather than creating one.
 An identity is an email plus `owner/**` or `owner/repo` scope:
 
 ```sh
-dotfiles-keys identity-add personal <email> 'Braden1996/**' \
+braden-dots identity add personal <email> 'Braden1996/**' \
   --vault '<work-vault-id>'
 ```
 
@@ -67,14 +66,14 @@ separate pair for the target machine:
 
 ```sh
 gh auth switch -h github.com -u Braden1996
-dotfiles-keys provision <work-machine> \
+braden-dots identity provision <work-machine> \
   --identity personal \
   --vault '<work-vault-id>' \
   --github-user Braden1996
 ```
 
-Then run `dotfiles-keys sync && dotfiles-keys load` on the target. Clone through
-the generated alias, for example:
+Then run `braden-dots identity sync && braden-dots identity ensure` on the
+target. Clone through the generated alias, for example:
 
 ```sh
 git clone git@github-personal:Braden1996/repo.git
@@ -97,7 +96,7 @@ Credential: <PAT>
 Run it through the checked wrapper:
 
 ```sh
-dotfiles-keys gh <slug> -- pr create --fill
+braden-dots identity gh <slug> -- pr create --fill
 ```
 
 The wrapper verifies the token’s account before running the requested command.
@@ -115,4 +114,9 @@ The wrapper verifies the token’s account before running the requested command.
 - The login Keychain improves at-rest protection; it does not isolate a token
   from every process running as the logged-in user while unlocked.
 
-Use `dotfiles-keys status` and `dotfiles-doctor` for the current machine state.
+Use `braden-dots identity status --repo . --json` to inspect the effective
+author, signing-key path, and SSH route without exposing key material. The
+machine’s configured `defaultGitHubUser` owns the plain `github.com` route;
+additional accounts use the alias reported by that status command.
+
+Use `braden-dots status` and `braden-dots doctor` for the wider machine state.

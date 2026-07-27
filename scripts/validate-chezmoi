@@ -24,6 +24,11 @@ ci_auth_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKnHcoqwYrh8jsWTbblsbqGGftKsGiL
 ci_sign_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFFtrgK1tGmyMelb3q2IwYV7GYJUZpvYEbZxQv0ReNjR dotfiles-ci-sign"
 ci_vault="Dotfiles CI Vault"
 ci_machine_name="ci-$profile"
+if [[ "$profile" == personal ]]; then
+	ci_github_user=Braden1996
+else
+	ci_github_user=isembard-managed
+fi
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
@@ -47,7 +52,7 @@ mkdir -p "$home_dir/.ssh"
 printf 'placeholder, never parsed\n' >"$home_dir/.ssh/id_ed25519"
 chmod 600 "$home_dir/.ssh/id_ed25519"
 
-# The machine public keys are written at runtime by `dotfiles-keys sync`, not by
+# The machine public keys are written at runtime by `braden-dots identity sync`, not by
 # chezmoi, so seed them the way that command would. Templates key off their
 # presence, which is what makes the fully-configured branch render here.
 printf '%s\n' "$ci_auth_key" >"$home_dir/.ssh/id_github_auth.pub"
@@ -59,6 +64,7 @@ cat >"$config_file" <<EOF
   machineName = "$ci_machine_name"
   gitName = "Dotfiles CI"
   defaultEmail = "personal@example.com"
+  defaultGitHubUser = "$ci_github_user"
   opVault = "$ci_vault"
   opTokenKeychainService = "dotfiles-ci-token"
 EOF
@@ -89,6 +95,7 @@ while IFS= read -r -d '' template; do
 			--promptString "Short name for this machine, used to scope its GitHub keys=$ci_machine_name" \
 			--promptString "Git author name=Dotfiles CI" \
 			--promptString "Default email address (used when no identity scope matches)=personal@example.com" \
+			--promptString "GitHub login used by the default github.com SSH route=$ci_github_user" \
 			--promptString "1Password vault for this machine's dotfile credentials (name or ID)=$ci_vault" \
 			--promptString "Keychain service name holding the 1Password service account token=dotfiles-ci-token" \
 			--file "$template" >"$rendered"
@@ -102,7 +109,7 @@ while IFS= read -r -d '' template; do
 	if [[ "$(head -n 1 "$rendered")" == "#!"*[Bb]"ash" ]]; then
 		bash -n "$rendered"
 		if command -v shellcheck >/dev/null 2>&1; then
-			shellcheck --shell bash --exclude SC1090,SC1091,SC2050 "$rendered"
+			shellcheck --shell bash --exclude SC1090,SC1091,SC2034,SC2050 "$rendered"
 		fi
 	fi
 
@@ -136,6 +143,7 @@ if [[ -n "$status" ]]; then
 fi
 
 cm verify --exclude scripts
+managed_targets=$(cm managed)
 
 # Identities come from the vault at runtime, so chezmoi must emit no identity
 # routing of its own: a templated includeIf could only ever encode the one
@@ -150,7 +158,7 @@ if [[ -e "$home_dir/.higher.gitconfig" || -e "$home_dir/.isembard.gitconfig" ]];
 	echo "per-identity gitconfig files must no longer be managed" >&2
 	exit 1
 fi
-if cm managed | grep -Eq 'config/git/identities'; then
+if grep -Eq 'config/git/identities' <<<"$managed_targets"; then
 	echo "git identities must not be managed by chezmoi" >&2
 	exit 1
 fi
@@ -173,11 +181,11 @@ ssh_config="$home_dir/.ssh/config"
 
 grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
 
-# Per-account host aliases are written at runtime by `dotfiles-keys sync`, so
+# Per-account host aliases are written at runtime by `braden-dots identity sync`, so
 # chezmoi supplies only the Include. Templating them would need to know which
 # identities own credentials, which only the vault knows.
 grep -Fq 'Include ~/.ssh/config.d/*.conf' "$ssh_config"
-if cm managed | grep -Eq 'ssh/config\.d'; then
+if grep -Eq 'ssh/config\.d' <<<"$managed_targets"; then
 	echo "per-account ssh blocks must not be managed by chezmoi" >&2
 	exit 1
 fi
@@ -190,19 +198,19 @@ if grep -Fq 'IdentityAgent' "$ssh_config"; then
 	exit 1
 fi
 
-# Seeded above the way `dotfiles-keys sync` would write it. chezmoi must not
+# Seeded above the way `braden-dots identity sync` would write it. chezmoi must not
 # own it: templating key material would create a second copy that can disagree
 # with the vault.
 grep -Fxq "$ci_auth_key" "$home_dir/.ssh/id_github_auth.pub"
 grep -Fxq "$ci_sign_key" "$home_dir/.ssh/id_github_sign.pub"
-if cm managed | grep -Eq 'id_github_(auth|sign)\.pub|allowed_signers'; then
+if grep -Eq 'id_github_(auth|sign)\.pub|allowed_signers' <<<"$managed_targets"; then
 	echo "public key material must not be managed by chezmoi" >&2
 	exit 1
 fi
 
 # allowed_signers must list every machine's signing key, and only the vault
 # knows how many machines exist, so it is built at runtime by
-# `dotfiles-keys sync-signers` rather than templated. Assert chezmoi does NOT
+# `braden-dots identity sync` rather than templated. Assert chezmoi does NOT
 # write it -- a templated one would silently distrust the other machines.
 if [[ -e "$home_dir/.ssh/allowed_signers" ]]; then
 	echo "allowed_signers must not be managed by chezmoi: it would only ever" >&2
@@ -250,18 +258,38 @@ fi
 
 # Keys must be scoped to this machine, otherwise revoking one machine on GitHub
 # revokes every machine and signatures cannot be attributed.
-keys_command="$home_dir/.local/bin/dotfiles-keys"
-[[ -x "$keys_command" ]]
-grep -Fq "GitHub Machine Auth ($ci_machine_name)" "$keys_command"
-grep -Fq "GitHub Machine Sign ($ci_machine_name)" "$keys_command"
-grep -Fq 'sync-signers' "$keys_command"
-
-secrets_command="$home_dir/.local/bin/dotfiles-secrets"
+braden_dots="$home_dir/.local/bin/braden-dots"
+identity_command="$home_dir/.local/libexec/braden-dots/identity"
+secrets_command="$home_dir/.local/libexec/braden-dots/secret"
+[[ -x "$braden_dots" ]]
+[[ -x "$identity_command" ]]
 [[ -x "$secrets_command" ]]
-grep -Fq 'Flow Icons Premium' "$secrets_command"
+grep -Fq "GitHub Machine Auth ($ci_machine_name)" "$identity_command"
+grep -Fq "GitHub Machine Sign ($ci_machine_name)" "$identity_command"
+grep -Fq "$ci_github_user" "$identity_command"
+grep -Fq 'sync-signers' "$identity_command"
+grep -Fq 'Flow Icons License' "$secrets_command"
+grep -Fq 'license key' "$secrets_command"
 "$secrets_command" list >"$temp_root/runtime-secrets"
 grep -Eq '^flow-icons[[:space:]]+personal,work[[:space:]]' \
 	"$temp_root/runtime-secrets"
+
+for module in core source identity secret update doctor; do
+	module_path="$home_dir/.local/libexec/braden-dots/$module"
+	[[ -x "$module_path" ]]
+	bash -n "$module_path"
+done
+settings_patcher="$home_dir/.local/libexec/braden-dots/jsonc-setting.cjs"
+[[ -r "$settings_patcher" ]]
+if command -v node >/dev/null 2>&1; then
+	node --check "$settings_patcher"
+fi
+for shim in dotfiles-keys dotfiles-secrets dotfiles-doctor dotfiles-update; do
+	shim_path="$home_dir/.local/bin/$shim"
+	[[ -x "$shim_path" ]]
+	bash -n "$shim_path"
+	grep -Fq 'deprecated' "$shim_path"
+done
 
 # Prove the generated config actually parses, rather than only that it contains
 # the right substrings. ssh -G fails on an unknown keyword or bad syntax.
@@ -322,7 +350,7 @@ if grep -Fq 'IdentitiesOnly yes' <<<"$bootstrap_ssh"; then
 fi
 
 # The credential helper must stay runnable before anything is configured.
-bootstrap_render dot_local/bin/executable_dotfiles-keys.tmpl >"$temp_root/keys-bootstrap"
+bootstrap_render dot_local/libexec/braden-dots/executable_identity.tmpl >"$temp_root/keys-bootstrap"
 bash -n "$temp_root/keys-bootstrap"
 
 brewfile="$home_dir/.config/homebrew/Brewfile"
@@ -449,7 +477,7 @@ if grep -Eq '^[[:space:]]*disable_checkpoint[[:space:]]*=' "$home_dir/.terraform
 	exit 1
 fi
 
-cursor_source="$repo_root/private_Library/private_Application Support/private_Cursor/User/modify_settings.json"
+cursor_source="$repo_root/private_Library/private_Application Support/private_Cursor/User/modify_private_settings.json"
 cursor_settings="$home_dir/Library/Application Support/Cursor/User/settings.json"
 if [[ ! -f "$cursor_settings" ]]; then
 	cursor_settings="$temp_root/rendered/cursor-settings.json"
@@ -461,7 +489,7 @@ license_key=flow-icons.licenseKey
 license_value=SYNTHETIC-FLOW-LICENSE
 cursor_existing="$temp_root/rendered/cursor-existing.json"
 cursor_preserved="$temp_root/rendered/cursor-preserved.json"
-printf '{\n  // Existing local-only extension state.\n  "%s": "%s",\n}\n' \
+printf '{\n  // Existing local-only extension state.\n  "%s": "%s",\n  "settingsSync.ignoredSettings": ["editor.fontSize", "-flow-icons.licenseKey"],\n}\n' \
 	"$license_key" "$license_value" >"$cursor_existing"
 cm execute-template --with-stdin --file "$cursor_source" \
 	<"$cursor_existing" >"$cursor_preserved"
@@ -469,10 +497,24 @@ if ! grep -Fq -- "\"$license_key\": \"$license_value\"" "$cursor_preserved"; the
 	echo "Cursor's existing local Flow Icons licence was not preserved" >&2
 	exit 1
 fi
+if ! grep -Fq 'editor.fontSize' "$cursor_preserved"; then
+	echo "Cursor's existing ignored settings were not preserved" >&2
+	exit 1
+fi
+grep -Fq 'flow-icons.licenseKey' "$cursor_preserved"
+if grep -Fq '"-flow-icons.licenseKey"' "$cursor_preserved"; then
+	echo "Cursor must not opt the licence back into Settings Sync" >&2
+	exit 1
+fi
 grep -Fq '"settingsSync.ignoredSettings": ["flow-icons.licenseKey"]' \
 	"$cursor_settings"
 if grep -Fq -- "\"$license_key\":" "$cursor_settings"; then
 	echo "Cursor's license key must not be invented on a new installation" >&2
+	exit 1
+fi
+cursor_mode="$(stat -f '%OLp' "$cursor_settings" 2>/dev/null || stat -c '%a' "$cursor_settings")"
+if [[ "$cursor_mode" != 600 ]]; then
+	echo "Cursor settings containing a projected licence must be private" >&2
 	exit 1
 fi
 
@@ -512,31 +554,35 @@ elif [[ -e "$grok_config" ]]; then
 	exit 1
 fi
 
+agent_files=(
+	"$home_dir/.codex/AGENTS.md"
+	"$home_dir/.claude/CLAUDE.md"
+	"$home_dir/.grok/GROK.md"
+	"$home_dir/.kimi-code/AGENTS.md"
+)
+for agent_file in "${agent_files[@]}"; do
+	[[ -f "$agent_file" ]]
+	grep -Fq "\`github.com\` is intentionally routed to \`$ci_github_user\`" "$agent_file"
+	grep -Fq 'braden-dots identity status --repo . --json' "$agent_file"
+	grep -Fq 'braden-dots source publish -m' "$agent_file"
+	grep -Fq 'nine hours' "$agent_file"
+done
+
 zed_settings="$home_dir/.config/zed/settings.json"
-flow_command="$home_dir/.local/bin/dotfiles-flow-icons"
+flow_command="$home_dir/.local/libexec/braden-dots/flow-icons"
 external_render="$temp_root/rendered/externals-$profile.toml"
-flow_icons_sha=$(awk -F'"' '/^archiveSha256/ { print $2 }' "$repo_root/.chezmoidata.toml")
 cm execute-template --file "$repo_root/.chezmoiexternal.toml" >"$external_render"
-# Flow Icons is macOS-only: .chezmoiignore drops the command off darwin and
-# .chezmoiexternal.toml gates the archive the same way. Asserting either
-# unconditionally fails every Linux job over content never meant to be there.
-# Both directions are checked, so a change that wrongly ships it to Linux is
-# caught rather than silently tolerated.
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$(uname -s)" == Darwin ]]; then
 	[[ -x "$flow_command" ]]
-	grep -Fq 'type = "archive"' "$external_render"
-	grep -Fq "$flow_icons_sha" "$external_render"
+	[[ -x "$home_dir/.local/bin/dotfiles-flow-icons" ]]
 else
-	if [[ -e "$flow_command" ]]; then
-		echo "dotfiles-flow-icons is macOS-only but was written on $(uname -s)" >&2
-		exit 1
-	fi
-	if grep -Fq "$flow_icons_sha" "$external_render"; then
-		echo "the Flow Icons external is macOS-only but rendered on $(uname -s)" >&2
-		exit 1
-	fi
+	[[ ! -e "$flow_command" ]]
+	[[ ! -e "$home_dir/.local/bin/dotfiles-flow-icons" ]]
 fi
 grep -Fq '"Flow Dim"' "$zed_settings"
+grep -Fq 'type = "archive"' "$external_render"
+grep -Fq 'f70290d55d4c4bb934ffc4b0ba0df8949120d2f483978a7a1b7f6c7c6a2d35b7' \
+	"$external_render"
 if grep -Fq 'type = "git-repo"' "$external_render"; then
 	echo "Flow Icons external must not use a mutable git checkout" >&2
 	exit 1

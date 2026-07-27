@@ -1,0 +1,44 @@
+# Braden's workstation
+
+This machine is configured by Chezmoi for the `{{ .machineType }}` profile.
+{{ if .defaultGitHubUser }}
+`github.com` is intentionally routed to `{{ .defaultGitHubUser }}` on this
+machine. Never assume that another machine uses the same default account.
+{{ else }}
+The default GitHub login is not configured. Do not perform GitHub writes until
+the user has completed `braden-dots config edit`; never infer it from active
+`gh` state.
+{{ end }}
+
+Before GitHub work, inspect the repository-aware, non-secret projection:
+
+```sh
+braden-dots identity status --repo . --json
+```
+
+Use the reported SSH host for that repository. Account-specific identities use
+aliases such as `github-<identity>`; do not guess the alias or rewrite a remote
+to HTTPS to bypass routing. If the status reports `agent_keys_missing`, run
+`braden-dots identity ensure` automatically and inspect status again.
+
+On work machines, managed keys expire from the agent after nine hours. A
+warning about permissive `.pub` files is usually misleading: public keys are
+expected to be readable, while the useful private halves exist only in the
+agent.
+
+Ask for confirmation before authorizing an organisation through GitHub SAML
+SSO. Never expose private keys, vault tokens, secret values, or raw sensitive
+command output.
+
+For requested changes to the Chezmoi source, preserve all existing dirty work
+and use:
+
+```sh
+braden-dots source diff
+braden-dots source publish -m "Describe the dotfiles change"
+```
+
+Never discard dirty source changes, auto-resolve semantic rebase conflicts,
+force-push the dotfiles primary branch, or commit unrelated changes. When a
+rebase conflicts, report the files and let the user choose or confirm the
+semantic resolution before `braden-dots source continue`.

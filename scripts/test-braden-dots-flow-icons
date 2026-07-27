@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+
+# Exercise `braden-dots app flow-icons` with fake Node and 1Password helpers.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null 2>&1 || {
+	echo "chezmoi is required" >&2
+	exit 1
+}
+real_node=$(command -v node) || {
+	echo "node is required" >&2
+	exit 1
+}
+if [[ "$real_node" == */mise/shims/node ]] && command -v mise >/dev/null 2>&1; then
+	real_node="$(mise where node)/bin/node"
+fi
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-flow-test.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+home_dir="$temp_root/home"
+fake_bin="$temp_root/bin"
+fake_state="$temp_root/state"
+config_file="$temp_root/chezmoi.toml"
+helper="$home_dir/.local/libexec/braden-dots/flow-icons"
+mkdir -p "$home_dir" "$fake_bin" "$fake_state" "$(dirname "$helper")"
+export FAKE_STATE="$fake_state"
+export REAL_NODE="$real_node"
+
+fail() {
+	printf 'FAIL: %s\n' "$*" >&2
+	exit 1
+}
+
+license_setting=flow-icons.licenseKey
+existing_license=existing-local-flow-license
+fixture_license=fixture-flow-secret
+
+cat >"$config_file" <<'EOF'
+[data]
+  machineType = "personal"
+  machineName = "flow-test"
+  gitName = "Dotfiles Test"
+  defaultEmail = "test@example.com"
+  defaultGitHubUser = "Braden1996"
+  opVault = "Personal Vault"
+EOF
+
+HOME="$home_dir" \
+	"$chezmoi_bin" execute-template \
+	--config "$config_file" \
+	--destination "$home_dir" \
+	--no-tty \
+	--source "$repo_root" \
+	--file "$repo_root/dot_local/libexec/braden-dots/executable_flow-icons.tmpl" >"$helper"
+chmod +x "$helper"
+
+source_dir="$home_dir/.local/share/chezmoi-externals/flow-icons-zed"
+extension_dir="$home_dir/.local/share/zed-dev-extensions/flow-icons-zed"
+consent_file="$home_dir/.config/flow-icons-zed/premium-network-consent-v1"
+secrets_helper="$home_dir/.local/bin/braden-dots"
+settings_patcher="$home_dir/.local/libexec/braden-dots/jsonc-setting.cjs"
+vscode_settings="$home_dir/Library/Application Support/Code/User/settings.json"
+cursor_settings="$home_dir/Library/Application Support/Cursor/User/settings.json"
+mkdir -p \
+	"$source_dir" \
+	"$(dirname "$secrets_helper")" \
+	"$(dirname "$settings_patcher")" \
+	"$(dirname "$vscode_settings")" \
+	"$(dirname "$cursor_settings")"
+cp "$repo_root/dot_local/libexec/braden-dots/jsonc-setting.cjs" "$settings_patcher"
+printf '// reviewed updater fixture\n' >"$source_dir/update-icons.cjs"
+printf 'fixture extension\n' >"$source_dir/extension.toml"
+cat >"$vscode_settings" <<'EOF'
+{
+	// Keep this comment and unrelated setting byte-for-byte.
+	"editor.fontSize": 14,
+	"settingsSync.ignoredSettings": [
+		"editor.fontSize",
+		"-flow-icons.licenseKey",
+	],
+}
+EOF
+cat >"$cursor_settings" <<EOF
+{
+	// An existing local value must survive the public path.
+	"$license_setting": "$existing_license",
+	"workbench.iconTheme": "flow-dim",
+}
+EOF
+chmod 644 "$vscode_settings" "$cursor_settings"
+
+cat >"$fake_bin/uname" <<'FAKE_UNAME'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+FAKE_UNAME
+
+cat >"$fake_bin/node" <<'FAKE_NODE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_STATE/node-args"
+if [[ "${1:-}" == */jsonc-setting.cjs ]]; then
+	exec "$REAL_NODE" "$@"
+fi
+printf '%s' "${FLOW_ICONS_LICENSE:-}" >>"$FAKE_STATE/node-env"
+payload=""
+if [[ "$*" == *" -e "* || "${1:-}" == -e ]]; then
+	payload=$(cat)
+	printf '%s' "$payload" >"$FAKE_STATE/node-stdin"
+fi
+if [[ "${FAKE_NODE_FAIL:-0}" == 1 ]]; then
+	exit 9
+fi
+mkdir -p icons icon_themes
+if [[ -n "$payload" ]]; then
+	printf 'premium\n' >icons/result
+else
+	printf 'public\n' >icons/result
+fi
+printf '{"themes":[]}\n' >icon_themes/flow-icons.json
+printf 'fixture-version\n' >.icon-version
+FAKE_NODE
+
+cat >"$fake_bin/mv" <<'FAKE_MV'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${FAKE_MV_INTERRUPT:-0}" == 1 &&
+	! -e "$FAKE_STATE/mv-interrupted" &&
+	"${3:-}" == */.flow-icons-stage.*/previous ]]; then
+	/bin/mv "$@"
+	: >"$FAKE_STATE/mv-interrupted"
+	kill -TERM "$PPID"
+	exit 0
+fi
+exec /bin/mv "$@"
+FAKE_MV
+
+cat >"$secrets_helper" <<'FAKE_SECRETS'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == secret ]] || exit 2
+shift
+printf '%s\n' "$*" >>"$FAKE_STATE/secret-calls"
+case "${1:-} ${2:-}" in
+"status flow-icons")
+	[[ "${FAKE_SECRET_PRESENT:-0}" == 1 ]]
+	;;
+"read flow-icons")
+	printf 'fixture-flow-secret'
+	;;
+*)
+	exit 2
+	;;
+esac
+FAKE_SECRETS
+
+chmod +x "$fake_bin/uname" "$fake_bin/node" "$fake_bin/mv" "$secrets_helper"
+: >"$fake_state/node-args"
+: >"$fake_state/node-env"
+: >"$fake_state/node-stdin"
+: >"$fake_state/secret-calls"
+
+run_helper() {
+	PATH="$fake_bin:$PATH" HOME="$home_dir" "$helper" "$@"
+}
+
+# Missing optional secret installs public assets and succeeds.
+FLOW_ICONS_LICENSE=hostile-ambient-secret run_helper >/dev/null
+[[ "$(<"$extension_dir/icons/result")" == public ]] ||
+	fail "missing secret should install public assets"
+[[ ! -s "$fake_state/node-env" ]] ||
+	fail "public fallback must clear an ambient Flow Icons licence"
+[[ -r "$extension_dir/.flow-icons-source-revision" ]] ||
+	fail "successful install should record the reviewed revision"
+if grep -Rq fixture-flow-secret "$extension_dir"; then
+	fail "the licence must not be written into the installed extension"
+fi
+if grep -Eq '"flow-icons\.licenseKey"[[:space:]]*:' "$vscode_settings"; then
+	fail "a missing secret must not invent a VS Code licence"
+fi
+grep -Fq "\"$license_setting\": \"$existing_license\"" \
+	"$cursor_settings" ||
+	fail "a missing secret must preserve Cursor's existing local licence"
+
+# An updater failure must leave the complete previous extension untouched.
+printf 'preserve-me\n' >"$extension_dir/local-sentinel"
+old_revision="$(<"$extension_dir/.flow-icons-source-revision")"
+export FAKE_NODE_FAIL=1
+if FLOW_ICONS_LICENSE=hostile-ambient-secret \
+	run_helper --public >/dev/null 2>&1; then
+	fail "simulated updater failure should be reported"
+fi
+unset FAKE_NODE_FAIL
+[[ "$(<"$extension_dir/local-sentinel")" == preserve-me ]] ||
+	fail "failed update should preserve the previous extension"
+[[ "$(<"$extension_dir/.flow-icons-source-revision")" == "$old_revision" ]] ||
+	fail "failed update should preserve the previous revision"
+
+# Premium uses stdin after consent and replaces the staged tree on success.
+mkdir -p "$(dirname "$consent_file")"
+printf 'approved\n' >"$consent_file"
+export FAKE_SECRET_PRESENT=1
+run_helper >/dev/null
+unset FAKE_SECRET_PRESENT
+[[ "$(<"$extension_dir/icons/result")" == premium ]] ||
+	fail "available secret and consent should install premium assets"
+[[ ! -e "$extension_dir/local-sentinel" ]] ||
+	fail "successful update should replace the previous extension"
+[[ "$(<"$fake_state/node-stdin")" == fixture-flow-secret ]] ||
+	fail "premium licence should reach Node on stdin"
+if grep -Fq fixture-flow-secret "$fake_state/node-args"; then
+	fail "premium licence must not appear in Node arguments"
+fi
+[[ ! -s "$fake_state/node-env" ]] ||
+	fail "premium licence must not appear in the Node environment"
+if grep -Rq fixture-flow-secret "$extension_dir"; then
+	fail "premium licence must not be persisted in the extension"
+fi
+for settings_file in "$vscode_settings" "$cursor_settings"; do
+	grep -Fq "\"$license_setting\": \"$fixture_license\"" "$settings_file" ||
+		fail "the 1Password licence should be projected into $settings_file"
+	[[ "$(grep -Fc 'flow-icons.licenseKey' "$settings_file")" -ge 2 ]] ||
+		fail "the projected licence should be excluded from Settings Sync"
+	mode=$(stat -f '%OLp' "$settings_file" 2>/dev/null || stat -c '%a' "$settings_file")
+	[[ "$mode" == 600 ]] ||
+		fail "editor settings containing the licence should use mode 0600"
+done
+grep -Fq '// Keep this comment and unrelated setting byte-for-byte.' \
+	"$vscode_settings" ||
+	fail "VS Code JSONC comments should be preserved"
+grep -Fq '"editor.fontSize": 14' "$vscode_settings" ||
+	fail "VS Code unrelated settings should be preserved"
+grep -Fq '"editor.fontSize"' "$vscode_settings" ||
+	fail "VS Code's existing ignored settings should be preserved"
+if grep -Fq '"-flow-icons.licenseKey"' "$vscode_settings"; then
+	fail "VS Code must not explicitly opt the licence back into Settings Sync"
+fi
+grep -Fq '// An existing local value must survive the public path.' \
+	"$cursor_settings" ||
+	fail "Cursor JSONC comments should be preserved"
+grep -Fq '"workbench.iconTheme": "flow-dim"' "$cursor_settings" ||
+	fail "Cursor unrelated settings should be preserved"
+if find "$(dirname "$extension_dir")" -maxdepth 1 \
+	-name '.flow-icons-stage.*' -print -quit | grep -q .; then
+	fail "staging directories should be cleaned after success"
+fi
+
+# An interruption between the two renames must restore the last good install.
+printf 'survive-interruption\n' >"$extension_dir/interruption-sentinel"
+rm -f "$fake_state/mv-interrupted"
+export FAKE_MV_INTERRUPT=1
+if run_helper --public >/dev/null 2>&1; then
+	fail "simulated swap interruption should be reported"
+fi
+unset FAKE_MV_INTERRUPT
+[[ "$(<"$extension_dir/interruption-sentinel")" == survive-interruption ]] ||
+	fail "swap interruption should restore the previous extension"
+if find "$(dirname "$extension_dir")" -maxdepth 1 \
+	-name '.flow-icons-stage.*' -print -quit | grep -q .; then
+	fail "restored interruption staging directories should be cleaned"
+fi
+
+# The reviewed updater currently extracts network archive names itself. Run a
+# hostile fixture under the real Node guard and prove an escaping write fails.
+real_bin="$temp_root/real-bin"
+mkdir -p "$real_bin"
+ln -s "$real_node" "$real_bin/node"
+ln -s "$fake_bin/uname" "$real_bin/uname"
+escape_file="$home_dir/.local/share/flow-icons-escape-sentinel"
+cat >"$source_dir/update-icons.cjs" <<'MALICIOUS_UPDATER'
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FLOW_TEST_ESCAPE, "escaped");
+MALICIOUS_UPDATER
+if PATH="$real_bin:$PATH" HOME="$home_dir" FLOW_TEST_ESCAPE="$escape_file" \
+	"$helper" --public >/dev/null 2>&1; then
+	fail "an updater write outside staging should be rejected"
+fi
+[[ ! -e "$escape_file" ]] ||
+	fail "a malicious archive path must not escape the staging directory"
+[[ "$(<"$extension_dir/interruption-sentinel")" == survive-interruption ]] ||
+	fail "a rejected escaping write should preserve the previous extension"
+
+printf 'Flow Icons tests passed\n'
