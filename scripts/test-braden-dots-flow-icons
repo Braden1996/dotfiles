@@ -224,7 +224,7 @@ for settings_file in "$vscode_settings" "$cursor_settings"; do
 		fail "the 1Password licence should be projected into $settings_file"
 	[[ "$(grep -Fc 'flow-icons.licenseKey' "$settings_file")" -ge 2 ]] ||
 		fail "the projected licence should be excluded from Settings Sync"
-	mode=$(stat -f '%OLp' "$settings_file" 2>/dev/null || stat -c '%a' "$settings_file")
+	mode=$(stat -c '%a' "$settings_file" 2>/dev/null || stat -f '%OLp' "$settings_file")
 	[[ "$mode" == 600 ]] ||
 		fail "editor settings containing the licence should use mode 0600"
 done

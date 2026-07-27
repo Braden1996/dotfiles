@@ -280,9 +280,14 @@ for module in core source identity secret update doctor; do
 	bash -n "$module_path"
 done
 settings_patcher="$home_dir/.local/libexec/braden-dots/jsonc-setting.cjs"
-[[ -r "$settings_patcher" ]]
-if command -v node >/dev/null 2>&1; then
-	node --check "$settings_patcher"
+if [[ "$(uname -s)" == Darwin ]]; then
+	[[ -r "$settings_patcher" ]]
+	if command -v node >/dev/null 2>&1; then
+		node --check "$settings_patcher"
+	fi
+elif [[ -e "$settings_patcher" ]]; then
+	echo "Flow Icons settings helper must be excluded from non-macOS profiles" >&2
+	exit 1
 fi
 for shim in dotfiles-keys dotfiles-secrets dotfiles-doctor dotfiles-update; do
 	shim_path="$home_dir/.local/bin/$shim"
