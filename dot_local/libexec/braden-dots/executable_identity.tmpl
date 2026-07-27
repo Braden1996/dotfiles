@@ -525,12 +525,13 @@ effective_repo_state() {
   remote_name="$(
     git -C "$repo" remote 2>/dev/null | awk 'NR == 1 { print; exit }'
   )"
-  [[ -n "$(git -C "$repo" remote 2>/dev/null | awk '$0 == "origin"')" ]] &&
+  if [[ -n "$(git -C "$repo" remote 2>/dev/null | awk '$0 == "origin"')" ]]; then
     remote_name=origin
-  EFFECTIVE_REMOTE="$(
-    [[ -n "$remote_name" ]] &&
-      git -C "$repo" remote get-url "$remote_name" 2>/dev/null || true
-  )"
+  fi
+  EFFECTIVE_REMOTE=""
+  if [[ -n "$remote_name" ]]; then
+    EFFECTIVE_REMOTE="$(git -C "$repo" remote get-url "$remote_name" 2>/dev/null || true)"
+  fi
   EFFECTIVE_HOST="$(identity_remote_host "$EFFECTIVE_REMOTE" 2>/dev/null || true)"
 
   local signing_name slug
