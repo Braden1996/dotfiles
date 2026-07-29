@@ -1023,8 +1023,8 @@ cmd_setup() {
     printf '\nPublishing public keys to GitHub\n'
     cmd_publish || return 1
   else
-    note "This service account is read-only; keys must already have been"
-    note "provisioned from a desktop-authenticated machine."
+    note "Automatic SSH key creation is disabled on work profiles; keys must"
+    note "already have been provisioned for this machine."
   fi
 
   printf '\nWriting local key files and the trust store\n'
@@ -1048,8 +1048,9 @@ check the configured token with:
 
   braden-dots identity token-check --repo .
 
-If it is missing, provision it from a desktop-authenticated machine with
-`braden-dots identity provision-token`; work service accounts stay read-only.
+If it is missing, run `braden-dots identity provision-token` explicitly on this
+machine. 1Password permits the item write only when the configured service
+account has Create Items permission in the target vault.
 DONE
 }
 
@@ -1134,9 +1135,9 @@ cmd_generate() {
   require_safe_machine || return 1
 
   if [[ "$BACKEND" == "service-account" ]]; then
-    fail "refusing to create items with a service account"
-    note "The service account is read-only by design. Run this on a personal"
-    note "machine signed in to the 1Password app, then 'load' here."
+    fail "automatic SSH item creation is disabled on work profiles"
+    note "Provision the pair from a machine authenticated to the intended"
+    note "GitHub account and a vault writer, then run 'load' here."
     return 1
   fi
 
@@ -1479,8 +1480,9 @@ cmd_provision() {
     return 1
   fi
   if [[ "$BACKEND" == "service-account" ]]; then
-    fail "refusing to create items with a read-only service account"
-    note "Run provision on a machine authenticated through the 1Password app."
+    fail "SSH key provisioning is disabled on work profiles"
+    note "Run provision from a machine authenticated to the intended GitHub"
+    note "account and a vault writer."
     return 1
   fi
   if ! gh auth status >/dev/null 2>&1; then
@@ -1602,6 +1604,9 @@ create_token_item() {
     pass "created $title in $vault"
   else
     fail "could not create $title in $vault"
+    if [[ "$BACKEND" == "service-account" ]]; then
+      note "Confirm this service account has Create Items permission in the vault."
+    fi
     unset payload
     return 1
   fi
@@ -1745,12 +1750,6 @@ cmd_provision_token() {
     return 2
   fi
   expires_in=$((10#$expires_in))
-  if [[ "$BACKEND" == service-account ]]; then
-    fail "refusing to create tokens with a read-only service account"
-    note "Run provision-token on a machine authenticated through the 1Password app."
-    return 1
-  fi
-
   local title probe probe_status=0
   if [[ -n "$slug" ]]; then
     title="$(account_item_title token "$machine" "$slug")"
@@ -2069,8 +2068,8 @@ cmd_identity_add() {
     return 1
   fi
   if [[ "$BACKEND" == "service-account" ]]; then
-    fail "refusing to create items with a read-only service account"
-    note "Add the identity from a machine signed in to the 1Password app."
+    fail "identity definition writes are disabled on work profiles"
+    note "Add the identity from a machine authenticated to a vault writer."
     return 1
   fi
 

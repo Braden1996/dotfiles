@@ -49,8 +49,9 @@ braden-dots init
 braden-dots identity status
 ```
 
-The work service account is read-only. `setup` therefore syncs and loads the
-pair provisioned above rather than creating one.
+`setup` intentionally limits the work service account to syncing and loading
+the pair provisioned above. Its actual vault permissions are enforced by
+1Password rather than inferred by `braden-dots`.
 
 ## Extra Git identity or GitHub account
 
@@ -84,8 +85,8 @@ be active.
 
 ## Optional GitHub API token
 
-Provision a short-lived fine-grained PAT from a desktop-authenticated machine
-that can write to the target vault:
+Provision a short-lived fine-grained PAT on the target machine, or from another
+machine that can authenticate as the intended GitHub account:
 
 ```sh
 braden-dots identity provision-token <machine> \
@@ -100,6 +101,11 @@ the resulting token without echoing it or placing it in argv, verifies its
 GitHub account, and sends it to 1Password over stdin. GitHub still requires the
 repository selection and any organization approval in its UI. Use
 `--identity <slug>` when provisioning a separate account.
+
+On a work profile, this explicit command may write through the configured
+service account. 1Password remains the authority: the service account must
+have `Create Items` permission in the target vault. Other work-profile identity
+mutations remain disabled.
 
 The default account is stored as:
 
@@ -146,10 +152,10 @@ requests, but the requested `gh` operation remains the final permission test.
 - Retire work access by also disabling its service account.
 - Revocation stops future vault reads. It cannot recall a private key or token
   already copied into process or agent memory.
-- A service account can read every secret in every vault it can access. Prefer
-  one work vault and service account per machine, and put only credentials made
-  for that machine or explicitly approved work-readable application secrets
-  inside it.
+- A service account can exercise every permission granted in every vault it can
+  access. Prefer one work vault and service account per machine, grant only the
+  required item permissions, and put only credentials made for that machine or
+  explicitly approved work-accessible application secrets inside it.
 - The login Keychain improves at-rest protection; it does not isolate a token
   from every process running as the logged-in user while unlocked.
 

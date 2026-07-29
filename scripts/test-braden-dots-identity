@@ -725,7 +725,7 @@ test_scoped_token_provision_and_idempotence() {
 	assert_tokens_not_logged
 }
 
-test_token_provision_failures_are_read_only() {
+test_token_provision_safety_boundaries() {
 	new_case token-provision-failures
 	if printf '%s\n' fixture-scoped-correct |
 		run_helper "$personal_helper" provision-token ci-work \
@@ -740,18 +740,18 @@ test_token_provision_failures_are_read_only() {
 	assert_tokens_not_logged
 
 	new_case work-token-provision
-	if printf '%s\n' fixture-scoped-correct |
+	printf '%s\n' fixture-managed-correct |
 		run_helper "$work_helper" provision-token ci-work \
 			--vault "Target<>Vault" \
-			--github-user Braden1996 \
+			--github-user braden-marshall_isembard \
 			--target Isembard-Mason/mason-os \
-			--yes >/dev/null 2>&1; then
-		fail "a service account must not provision API tokens"
-	fi
-	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
-		"service-account token provisioning must remain vault-read-only"
+			--no-open \
+			--yes >/dev/null
+	assert_eq 1 \
+		"$(item_count "GitHub Machine PAT (ci-work)" "Target<>Vault")" \
+		"explicit service-account token provisioning should create the vault item"
 	assert_eq 0 "$(wc -l <"$FAKE_STATE/browser-opens" | tr -d ' ')" \
-		"service-account refusal should happen before opening GitHub"
+		"--no-open should leave browser state untouched"
 	assert_tokens_not_logged
 }
 
@@ -1406,7 +1406,7 @@ run_test "default provision" test_default_provision
 run_test "identity provision" test_identity_provision
 run_test "default API token provision" test_default_token_provision
 run_test "scoped API token provision is idempotent" test_scoped_token_provision_and_idempotence
-run_test "API token provision failures are read-only" test_token_provision_failures_are_read_only
+run_test "API token provisioning enforces safety boundaries" test_token_provision_safety_boundaries
 run_test "legacy identity provision syntax" test_legacy_identity_provision
 run_test "identity-add target vault" test_identity_add_target_vault
 run_test "GitHub user mismatch is read-only" test_github_user_mismatch_is_read_only
