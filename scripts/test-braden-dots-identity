@@ -58,7 +58,11 @@ assert_tokens_not_logged() {
 	local log token_value
 	for log in "$FAKE_STATE/op-calls" "$FAKE_STATE/gh-calls" \
 		"$FAKE_STATE/gh-contexts" "$FAKE_STATE/gh-adds" "$FAKE_STATE/ssh-adds"; do
-		for token_value in fixture-scoped-correct fixture-scoped-wrong fixture-legacy; do
+		for token_value in \
+			fixture-default-correct \
+			fixture-scoped-correct \
+			fixture-scoped-wrong \
+			fixture-legacy; do
 			assert_not_contains "$log" "$token_value" \
 				"credential values must never be written to command logs"
 		done
@@ -378,6 +382,10 @@ done
 printf '\n' >>"$FAKE_STATE/gh-calls"
 
 case "${GH_TOKEN:-}" in
+fixture-default-correct)
+	token_context=default-correct
+	token_user=default-account
+	;;
 fixture-scoped-correct)
 	token_context=scoped-correct
 	token_user=Braden1996
@@ -822,6 +830,97 @@ test_gh_wrapper_correct_scoped_token() {
 	unset raw_token
 }
 
+test_gh_wrapper_resolves_repository_account() {
+	new_case gh-repo-default
+	seed_item default-token "API Credential" \
+		"GitHub Machine PAT (ci-work)" "Target<>Vault" \
+		"" "" "" "default-account" "fixture-default-correct"
+
+	local repo
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey "~/.ssh/id_github_sign.pub"
+	git -C "$repo" remote add origin \
+		git@github.com:Isembard-Mason/mason-os.git
+	run_helper "$work_helper" gh --repo "$repo" -- pr create --title test \
+		>/dev/null
+
+	assert_contains "$FAKE_STATE/op-calls" \
+		$'item\tget\tGitHub Machine PAT (ci-work)' \
+		"default repository route should select the machine token"
+	if grep -Fvx default-correct "$FAKE_STATE/gh-contexts" >/dev/null; then
+		fail "the default repository route should use only the default token"
+	fi
+	assert_tokens_not_logged
+
+	new_case gh-repo-scoped
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-correct"
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey \
+		"~/.ssh/id_github_sign_personal.pub"
+	git -C "$repo" remote add origin \
+		git@github-personal:Braden1996/dotfiles.git
+	run_helper "$work_helper" gh --repo="$repo" -- pr create --title test \
+		>/dev/null
+
+	assert_contains "$FAKE_STATE/op-calls" \
+		$'item\tget\tGitHub Machine PAT (ci-work personal)' \
+		"scoped repository route should select its machine-and-identity token"
+	if grep -Fvx scoped-correct "$FAKE_STATE/gh-contexts" >/dev/null; then
+		fail "the scoped repository route should use only its scoped token"
+	fi
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_rejects_repository_route_mismatch() {
+	new_case gh-repo-route-mismatch
+	local repo
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey \
+		"~/.ssh/id_github_sign_personal.pub"
+	git -C "$repo" remote add origin \
+		git@github.com:Braden1996/dotfiles.git
+
+	if run_helper "$work_helper" gh --repo "$repo" -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "repository-aware gh should reject a mismatched SSH account route"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')" \
+		"route mismatch should fail before reading a token"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"route mismatch should fail before invoking gh"
+}
+
+test_gh_wrapper_rejects_default_token_label_mismatch() {
+	new_case gh-default-user-mismatch
+	seed_item default-token "API Credential" \
+		"GitHub Machine PAT (ci-work)" "Target<>Vault" \
+		"" "" "" "SomebodyElse" "fixture-default-correct"
+
+	local repo
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey "~/.ssh/id_github_sign.pub"
+	git -C "$repo" remote add origin \
+		git@github.com:Isembard-Mason/mason-os.git
+
+	if run_helper "$work_helper" gh --repo "$repo" -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "default token label should match the configured github.com account"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/gh-calls" | tr -d ' ')" \
+		"default token label mismatch should fail before invoking gh"
+	assert_tokens_not_logged
+}
+
 test_raw_token_legacy_and_no_scoped_fallback() {
 	new_case token-legacy
 	seed_item legacy-token "API Credential" "GitHub Machine PAT" \
@@ -1137,6 +1236,9 @@ run_test "gh wrapper rejects empty token" test_gh_wrapper_empty_token
 run_test "gh wrapper rejects missing username" test_gh_wrapper_missing_username
 run_test "gh wrapper rejects wrong token account" test_gh_wrapper_wrong_token_account
 run_test "gh wrapper uses correct scoped token" test_gh_wrapper_correct_scoped_token
+run_test "gh wrapper resolves repository account" test_gh_wrapper_resolves_repository_account
+run_test "gh wrapper rejects repository route mismatch" test_gh_wrapper_rejects_repository_route_mismatch
+run_test "gh wrapper rejects default token label mismatch" test_gh_wrapper_rejects_default_token_label_mismatch
 run_test "raw token legacy behavior is isolated" test_raw_token_legacy_and_no_scoped_fallback
 run_test "end-to-end cross-vault workflow" test_end_to_end_cross_vault_workflow
 run_test "load default and identity keypairs" test_loads_default_and_identity_pairs

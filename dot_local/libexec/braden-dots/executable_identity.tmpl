@@ -91,8 +91,8 @@ Commands:
                 add <slug> <email> <owner/** | owner/repo>
                              [--vault <vault>]
   unload        Drop the loaded keys from the ssh-agent
-  gh            Run gh with a verified, identity-scoped token
-                gh <slug> -- <gh arguments...>
+  gh            Run gh with the verified token for a repository's account
+                gh [--repo PATH | --identity SLUG] -- <gh arguments...>
   token         Print a GitHub token from the vault
                 token [<slug>]
 
@@ -256,6 +256,7 @@ machine_item_title() {
   case "$kind" in
     auth) printf '%s (%s)' "$AUTH_ITEM_PREFIX" "$machine" ;;
     sign) printf '%s (%s)' "$SIGN_ITEM_PREFIX" "$machine" ;;
+    token) printf '%s (%s)' "$TOKEN_ITEM_PREFIX" "$machine" ;;
   esac
 }
 
@@ -543,6 +544,49 @@ effective_repo_state() {
       EFFECTIVE_EXPECTED_HOST="github-$slug"
       ;;
     *) EFFECTIVE_EXPECTED_HOST=github.com ;;
+  esac
+}
+
+resolve_repo_github_account() {
+  local repo="$1" slug
+  effective_repo_state "$repo" || return 1
+
+  if [[ -z "$EFFECTIVE_REMOTE" ]]; then
+    fail "repository has no remote from which to resolve a GitHub account"
+    note "Use --identity <slug> when no repository route is available."
+    return 1
+  fi
+  if [[ -z "$EFFECTIVE_HOST" ]]; then
+    fail "repository remote is not an SSH GitHub route: $EFFECTIVE_REMOTE"
+    note "Expected the generated route: $EFFECTIVE_EXPECTED_HOST"
+    return 1
+  fi
+  if [[ "$EFFECTIVE_HOST" != "$EFFECTIVE_EXPECTED_HOST" ]]; then
+    fail "repository remote uses '$EFFECTIVE_HOST', expected '$EFFECTIVE_EXPECTED_HOST'"
+    note "Run: braden-dots identity status --repo '$repo'"
+    return 1
+  fi
+
+  case "$EFFECTIVE_EXPECTED_HOST" in
+    github.com)
+      RESOLVED_GITHUB_IDENTITY=""
+      RESOLVED_GITHUB_USER="$DEFAULT_GITHUB_USER"
+      RESOLVED_TOKEN_TITLE="$(machine_item_title token "$MACHINE")"
+      ;;
+    github-*)
+      slug="${EFFECTIVE_EXPECTED_HOST#github-}"
+      if ! valid_slug "$slug"; then
+        fail "repository resolved an unsafe GitHub identity: $slug"
+        return 1
+      fi
+      RESOLVED_GITHUB_IDENTITY="$slug"
+      RESOLVED_GITHUB_USER=""
+      RESOLVED_TOKEN_TITLE="$(account_item_title token "$MACHINE" "$slug")"
+      ;;
+    *)
+      fail "unsupported generated GitHub route: $EFFECTIVE_EXPECTED_HOST"
+      return 1
+      ;;
   esac
 }
 
@@ -2145,36 +2189,85 @@ cmd_token() {
 }
 
 cmd_gh() {
-  case "${1:-}" in
-    -h | --help)
-      note "usage: braden-dots identity gh <slug> -- <gh arguments...>"
-      return 0
-      ;;
-    "")
-      fail "usage: braden-dots identity gh <slug> -- <gh arguments...>"
-      return 2
-      ;;
-    -*)
-      fail "identity slug cannot be an option: $1"
-      return 2
-      ;;
-  esac
+  local repo="." slug="" selector="" separator=0
+  while (($# > 0)); do
+    case "$1" in
+      --)
+        separator=1
+        shift
+        break
+        ;;
+      --repo)
+        if [[ -n "$selector" || $# -lt 2 || -z "$2" ]]; then
+          fail "--repo needs exactly one path and cannot be combined with --identity"
+          return 2
+        fi
+        repo="$2"
+        selector=repo
+        shift 2
+        ;;
+      --repo=*)
+        if [[ -n "$selector" || -z "${1#*=}" ]]; then
+          fail "--repo needs exactly one path and cannot be combined with --identity"
+          return 2
+        fi
+        repo="${1#*=}"
+        selector=repo
+        shift
+        ;;
+      --identity)
+        if [[ -n "$selector" || $# -lt 2 || -z "$2" ]]; then
+          fail "--identity needs exactly one slug and cannot be combined with --repo"
+          return 2
+        fi
+        slug="$2"
+        selector=identity
+        shift 2
+        ;;
+      --identity=*)
+        if [[ -n "$selector" || -z "${1#*=}" ]]; then
+          fail "--identity needs exactly one slug and cannot be combined with --repo"
+          return 2
+        fi
+        slug="${1#*=}"
+        selector=identity
+        shift
+        ;;
+      -h | --help)
+        note "usage: braden-dots identity gh [--repo PATH | --identity SLUG] --"
+        note "       <gh arguments...>"
+        return 0
+        ;;
+      -*)
+        fail "unknown identity gh option: $1"
+        return 2
+        ;;
+      *)
+        # Backwards compatibility for `gh <slug> -- ...`.
+        if [[ -n "$selector" ]]; then
+          fail "unexpected identity gh argument: $1"
+          return 2
+        fi
+        slug="$1"
+        selector=identity
+        shift
+        ;;
+    esac
+  done
 
-  local slug="$1"
-  shift
-  if ! valid_slug "$slug"; then
-    fail "identity slugs must start with a letter or number and contain only"
-    fail "letters, numbers, dot, underscore and hyphen"
-    return 2
-  fi
-  if [[ "${1:-}" != "--" ]]; then
+  if ((separator == 0)); then
     fail "separate braden-dots and gh arguments with --"
-    fail "usage: braden-dots identity gh <slug> -- <gh arguments...>"
+    fail "usage: braden-dots identity gh [--repo PATH | --identity SLUG] -- <gh arguments...>"
     return 2
   fi
-  shift
   if (($# == 0)); then
     fail "no gh command was provided"
+    return 2
+  fi
+
+  if [[ "$selector" == identity ]] && ! valid_slug "$slug"; then
+    fail "identity slugs must start with a letter or number and contain only"
+    fail "letters, numbers, dot, underscore and hyphen"
     return 2
   fi
 
@@ -2183,10 +2276,28 @@ cmd_gh() {
   require_vault || return 1
   require_safe_machine || return 1
 
-  local title token_item_id expected_user token actual_user
-  title="$(account_item_title token "$MACHINE" "$slug")"
+  local title configured_user token_item_id expected_user token actual_user
+  if [[ "$selector" == identity ]]; then
+    title="$(account_item_title token "$MACHINE" "$slug")"
+    configured_user=""
+  else
+    resolve_repo_github_account "$repo" || return 1
+    title="$RESOLVED_TOKEN_TITLE"
+    configured_user="$RESOLVED_GITHUB_USER"
+  fi
+
   token_item_id="$(resolve_token_item_id "$title")" || return 1
   expected_user="$(read_token_username "$token_item_id" "$title")" || return 1
+
+  local normalized_configured normalized_expected
+  normalized_configured="$(tr '[:upper:]' '[:lower:]' <<<"$configured_user")"
+  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
+  if [[ -n "$configured_user" ]] &&
+    [[ "$normalized_configured" != "$normalized_expected" ]]; then
+    fail "$title is labeled for '$expected_user', but github.com is configured for '$configured_user'"
+    return 1
+  fi
+
   token="$(read_token_credential "$token_item_id" "$title")" || return 1
 
   # A non-empty GH_TOKEN takes precedence over gh's stored login. Pinning the
@@ -2199,9 +2310,8 @@ cmd_gh() {
     return 1
   fi
 
-  local normalized_actual normalized_expected
+  local normalized_actual
   normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual_user")"
-  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
   if [[ "$normalized_actual" != "$normalized_expected" ]]; then
     fail "$title authenticates as '$actual_user', expected '$expected_user'"
     return 1

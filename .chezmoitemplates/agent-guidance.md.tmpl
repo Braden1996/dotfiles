@@ -21,6 +21,16 @@ aliases such as `github-<identity>`; do not guess the alias or rewrite a remote
 to HTTPS to bypass routing. If the status reports `agent_keys_missing`, run
 `braden-dots identity ensure` automatically and inspect status again.
 
+For GitHub API work, use the same repository-aware identity resolution instead
+of ambient `gh` authentication:
+
+```sh
+braden-dots identity gh --repo . -- <gh arguments...>
+```
+
+This selects the default GitHub account unless the repository's generated
+identity route selects a separate account.
+
 On work machines, managed keys expire from the agent after nine hours. A
 warning about permissive `.pub` files is usually misleading: public keys are
 expected to be readable, while the useful private halves exist only in the

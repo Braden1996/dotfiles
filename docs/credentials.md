@@ -84,8 +84,16 @@ be active.
 
 ## Optional GitHub API token
 
-For `gh` on a non-interactive account, create a short-lived fine-grained PAT and
-store it as:
+For `gh` on a non-interactive account, create a short-lived fine-grained PAT.
+The default account uses the machine title:
+
+```text
+Title:      GitHub Machine PAT (<machine>)
+Username:   <GitHub login>
+Credential: <PAT>
+```
+
+A separate account selected by an identity scope uses:
 
 ```text
 Title:      GitHub Machine PAT (<machine> <slug>)
@@ -93,13 +101,18 @@ Username:   <GitHub login>
 Credential: <PAT>
 ```
 
-Run it through the checked wrapper:
+Run `gh` through the checked, repository-aware wrapper:
 
 ```sh
-braden-dots identity gh <slug> -- pr create --fill
+braden-dots identity gh --repo . -- pr create --fill
 ```
 
-The wrapper verifies the token’s account before running the requested command.
+Git's generated `includeIf` rules remain the source of truth: an author-only
+scope keeps the default account, while a scope with its own key pair selects
+the matching machine-and-identity token. The wrapper rejects a mismatched SSH
+route and verifies the token’s account before running the requested command.
+Use `--identity <slug>` only when no repository route is available. The legacy
+positional form, `gh <slug> -- ...`, remains accepted.
 
 ## Retirement and limits
 
