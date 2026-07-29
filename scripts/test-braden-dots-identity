@@ -96,8 +96,11 @@ new_case() {
 	: >"$FAKE_STATE/gh-contexts"
 	: >"$FAKE_STATE/gh-adds"
 	: >"$FAKE_STATE/ssh-adds"
+	: >"$FAKE_STATE/browser-opens"
 	unset FAKE_GH_FAIL_TYPE
 	unset FAKE_GH_USER
+	unset FAKE_GH_DENY_REPO
+	unset FAKE_GH_DENY_ACTIONS
 	unset FAKE_OP_FAIL_FIELD
 	unset FAKE_EXPECT_DESKTOP_AUTH_ONLY
 	unset GH_TOKEN
@@ -228,6 +231,10 @@ case "${1:-} ${2:-}" in
 	done
 	item_json_list "$requested_vault" "$requested_category"
 	;;
+"item template")
+	printf '%s\n' \
+		'{"title":"","category":"API_CREDENTIAL","fields":[{"id":"username","label":"username","type":"STRING","value":""},{"id":"credential","label":"credential","type":"CONCEALED","value":""}]}'
+	;;
 "item get")
 	wanted=${3:-}
 	requested_vault=""
@@ -285,6 +292,7 @@ case "${1:-} ${2:-}" in
 	scope=""
 	username=""
 	credential=""
+	payload=""
 	shift 2
 	while (($# > 0)); do
 		case "$1" in
@@ -316,12 +324,35 @@ case "${1:-} ${2:-}" in
 			credential=${1#*=}
 			shift
 			;;
+		-)
+			payload=$(cat)
+			shift
+			;;
 		*)
 			shift
 			;;
 		esac
 	done
+	if [[ -n "$payload" ]]; then
+		category=$(jq -r '.category // empty' <<<"$payload")
+		title=$(jq -r '.title // empty' <<<"$payload")
+		username=$(
+			jq -r '
+				.fields[]
+				| select(.id == "username" or .label == "username")
+				| .value // empty
+			' <<<"$payload"
+		)
+		credential=$(
+			jq -r '
+				.fields[]
+				| select(.id == "credential" or .label == "credential")
+				| .value // empty
+			' <<<"$payload"
+		)
+	fi
 	[[ "$category" == ssh ]] && category="SSH Key"
+	[[ "$category" == API_CREDENTIAL ]] && category="API Credential"
 	line_count=$(wc -l <"$FAKE_STATE/items" | tr -d ' ')
 	id="created-$((line_count + 1))"
 	public_key=""
@@ -408,6 +439,22 @@ fixture-legacy)
 	;;
 esac
 printf '%s\n' "$token_context" >>"$FAKE_STATE/gh-contexts"
+
+if [[ "${1:-}" == api && "${2:-}" == repos/* ]]; then
+	if [[ -n "${FAKE_GH_DENY_REPO:-}" ]]; then
+		exit 1
+	fi
+	if [[ "${2:-}" == */actions/runs* ]]; then
+		[[ -z "${FAKE_GH_DENY_ACTIONS:-}" ]] || exit 1
+		printf '0\n'
+	elif [[ "${2:-}" == */pulls* ]]; then
+		printf '[]\n'
+	else
+		target=${2#repos/}
+		printf '%s\n' "$target"
+	fi
+	exit 0
+fi
 
 case "${1:-} ${2:-}" in
 "auth status")
@@ -519,8 +566,13 @@ cat >"$fake_bin/uname" <<'FAKE_UNAME'
 printf 'test-runner\n'
 FAKE_UNAME
 
+cat >"$fake_bin/open" <<'FAKE_OPEN'
+#!/usr/bin/env bash
+printf '%s\n' "${1:-}" >>"$FAKE_STATE/browser-opens"
+FAKE_OPEN
+
 chmod +x "$fake_bin/op" "$fake_bin/gh" "$fake_bin/ssh-add" \
-	"$fake_bin/security" "$fake_bin/uname"
+	"$fake_bin/security" "$fake_bin/uname" "$fake_bin/open"
 
 # ---------------------------------------------------------------------------
 # Render one desktop-backed and one service-account-backed helper.
@@ -606,6 +658,96 @@ test_identity_provision() {
 		"identity provision should create one suffixed signing item"
 	assert_eq 0 "$(item_count "GitHub Machine Auth (target-machine)" "Target<>Vault")" \
 		"identity provision must not create the default pair"
+}
+
+test_default_token_provision() {
+	new_case default-token-provision
+	printf '%s\n' fixture-scoped-correct |
+		run_helper "$personal_helper" provision-token ci-work \
+			--vault "Target<>Vault" \
+			--github-user Braden1996 \
+			--target Isembard-Mason/mason-os \
+			--profile pr-maintainer \
+			--expires-in 30 \
+			--yes >/dev/null
+
+	assert_eq 1 \
+		"$(item_count "GitHub Machine PAT (ci-work)" "Target<>Vault")" \
+		"default token provisioning should create the machine token item"
+	assert_contains "$FAKE_STATE/items" \
+		"|GitHub Machine PAT (ci-work)|Target<>Vault||||Braden1996|fixture-scoped-correct" \
+		"token item should contain the verified account and supplied credential"
+	assert_contains "$FAKE_STATE/browser-opens" \
+		"target_name=Isembard-Mason" \
+		"token provisioning should prefill the GitHub resource owner"
+	assert_contains "$FAKE_STATE/browser-opens" \
+		"actions=read&contents=read&issues=write&pull_requests=write&statuses=read" \
+		"pr-maintainer should prefill its reviewed permission set"
+	assert_contains "$FAKE_STATE/browser-opens" \
+		"expires_in=30" \
+		"token provisioning should prefill a bounded expiration"
+	assert_not_contains "$FAKE_STATE/op-calls" fixture-scoped-correct \
+		"the token must reach 1Password over stdin rather than argv"
+	assert_tokens_not_logged
+}
+
+test_scoped_token_provision_and_idempotence() {
+	new_case scoped-token-provision
+	printf '%s\n' fixture-scoped-correct |
+		run_helper "$personal_helper" provision-token ci-work \
+			--identity personal \
+			--vault "Target<>Vault" \
+			--github-user Braden1996 \
+			--target Braden1996/dotfiles \
+			--no-open \
+			--yes >/dev/null
+
+	assert_eq 1 \
+		"$(item_count "GitHub Machine PAT (ci-work personal)" "Target<>Vault")" \
+		"scoped token provisioning should create the machine-and-identity item"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/browser-opens" | tr -d ' ')" \
+		"--no-open should leave browser state untouched"
+
+	run_helper "$personal_helper" provision-token ci-work \
+		--identity personal \
+		--vault "Target<>Vault" \
+		--github-user Braden1996 \
+		--target Braden1996/dotfiles \
+		--yes >/dev/null
+	assert_eq 1 \
+		"$(item_count "GitHub Machine PAT (ci-work personal)" "Target<>Vault")" \
+		"rerunning provision-token must not replace or duplicate an existing item"
+	assert_tokens_not_logged
+}
+
+test_token_provision_failures_are_read_only() {
+	new_case token-provision-failures
+	if printf '%s\n' fixture-scoped-correct |
+		run_helper "$personal_helper" provision-token ci-work \
+			--vault "Target<>Vault" \
+			--github-user SomebodyElse \
+			--target Isembard-Mason/mason-os \
+			--yes >/dev/null 2>&1; then
+		fail "a token for the wrong GitHub account should be rejected"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"wrong-account token must fail before creating a vault item"
+	assert_tokens_not_logged
+
+	new_case work-token-provision
+	if printf '%s\n' fixture-scoped-correct |
+		run_helper "$work_helper" provision-token ci-work \
+			--vault "Target<>Vault" \
+			--github-user Braden1996 \
+			--target Isembard-Mason/mason-os \
+			--yes >/dev/null 2>&1; then
+		fail "a service account must not provision API tokens"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/items" | tr -d ' ')" \
+		"service-account token provisioning must remain vault-read-only"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/browser-opens" | tr -d ' ')" \
+		"service-account refusal should happen before opening GitHub"
+	assert_tokens_not_logged
 }
 
 test_legacy_identity_provision() {
@@ -921,6 +1063,39 @@ test_gh_wrapper_rejects_default_token_label_mismatch() {
 	assert_tokens_not_logged
 }
 
+test_token_check_verifies_repository_access() {
+	new_case token-check
+	seed_item default-token "API Credential" \
+		"GitHub Machine PAT (ci-work)" "Target<>Vault" \
+		"" "" "" "default-account" "fixture-default-correct"
+
+	local repo
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey "~/.ssh/id_github_sign.pub"
+	git -C "$repo" remote add origin \
+		git@github.com:Isembard-Mason/mason-os.git
+	run_helper "$work_helper" token-check --repo "$repo" >/dev/null
+
+	assert_contains "$FAKE_STATE/gh-calls" \
+		$'api\trepos/Isembard-Mason/mason-os\t--jq\t.full_name' \
+		"token-check should verify repository visibility"
+	assert_contains "$FAKE_STATE/gh-calls" \
+		$'api\trepos/Isembard-Mason/mason-os/actions/runs?per_page=1\t--jq\t.total_count' \
+		"token-check should verify Actions read access"
+	assert_contains "$FAKE_STATE/gh-calls" \
+		$'api\trepos/Isembard-Mason/mason-os/pulls?per_page=1\t--jq\tlength' \
+		"token-check should verify pull-request read access"
+	assert_tokens_not_logged
+
+	export FAKE_GH_DENY_ACTIONS=1
+	if run_helper "$work_helper" token-check --repo "$repo" >/dev/null 2>&1; then
+		fail "token-check should fail when Actions access is unavailable"
+	fi
+	assert_tokens_not_logged
+}
+
 test_raw_token_legacy_and_no_scoped_fallback() {
 	new_case token-legacy
 	seed_item legacy-token "API Credential" "GitHub Machine PAT" \
@@ -1224,6 +1399,9 @@ run_test() {
 
 run_test "default provision" test_default_provision
 run_test "identity provision" test_identity_provision
+run_test "default API token provision" test_default_token_provision
+run_test "scoped API token provision is idempotent" test_scoped_token_provision_and_idempotence
+run_test "API token provision failures are read-only" test_token_provision_failures_are_read_only
 run_test "legacy identity provision syntax" test_legacy_identity_provision
 run_test "identity-add target vault" test_identity_add_target_vault
 run_test "GitHub user mismatch is read-only" test_github_user_mismatch_is_read_only
@@ -1239,6 +1417,7 @@ run_test "gh wrapper uses correct scoped token" test_gh_wrapper_correct_scoped_t
 run_test "gh wrapper resolves repository account" test_gh_wrapper_resolves_repository_account
 run_test "gh wrapper rejects repository route mismatch" test_gh_wrapper_rejects_repository_route_mismatch
 run_test "gh wrapper rejects default token label mismatch" test_gh_wrapper_rejects_default_token_label_mismatch
+run_test "token-check verifies repository access" test_token_check_verifies_repository_access
 run_test "raw token legacy behavior is isolated" test_raw_token_legacy_and_no_scoped_fallback
 run_test "end-to-end cross-vault workflow" test_end_to_end_cross_vault_workflow
 run_test "load default and identity keypairs" test_loads_default_and_identity_pairs

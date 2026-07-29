@@ -77,6 +77,12 @@ Commands:
   provision     Create+publish keys for another machine/account
                 provision <machine> [--identity <slug>] [--vault <vault>]
                                       [--github-user <login>]
+  provision-token
+                Create a guided GitHub API token for another machine/account
+                provision-token <machine> [--identity <slug>] --github-user <login>
+                          --target <owner/repo> [--vault <vault>]
+                          [--profile pr-maintainer] [--expires-in <days>]
+                          [--no-open] [--yes]
   store-token   Store the service account token in the macOS keychain (work only)
   status [--repo PATH] [--json]
                 Report backend, agent, effective author, signing key and SSH route
@@ -93,6 +99,8 @@ Commands:
   unload        Drop the loaded keys from the ssh-agent
   gh            Run gh with the verified token for a repository's account
                 gh [--repo PATH | --identity SLUG] -- <gh arguments...>
+  token-check   Verify the repository token, account and read access
+                token-check [--repo PATH]
   token         Print a GitHub token from the vault
                 token [<slug>]
 
@@ -511,6 +519,23 @@ identity_remote_host() {
       ;;
     *) return 1 ;;
   esac
+}
+
+identity_remote_target() {
+  local url="$1" target
+  case "$url" in
+    git@*:*/*)
+      target="${url#*:}"
+      ;;
+    ssh://git@*/*)
+      target="${url#ssh://git@}"
+      target="${target#*/}"
+      ;;
+    *) return 1 ;;
+  esac
+  target="${target%.git}"
+  valid_github_target "$target" || return 1
+  printf '%s\n' "$target"
 }
 
 effective_repo_state() {
@@ -1018,8 +1043,13 @@ specialist command directly, continue with:
   braden-dots identity status
   braden-dots identity test
 
-GitHub tokens remain an explicit advanced operation; they are not required for
-routine onboarding.
+Git operations use SSH and need no API token. For repository-aware `gh` access,
+check the configured token with:
+
+  braden-dots identity token-check --repo .
+
+If it is missing, provision it from a desktop-authenticated machine with
+`braden-dots identity provision-token`; work service accounts stay read-only.
 DONE
 }
 
@@ -1278,6 +1308,39 @@ valid_scope_list() {
   [[ "$found" -eq 1 ]]
 }
 
+valid_github_user() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]
+}
+
+valid_github_target() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+$ ]]
+}
+
+url_encode() {
+  jq -rn --arg value "$1" '$value | @uri'
+}
+
+token_profile_query() {
+  case "$1" in
+    pr-maintainer)
+      printf '%s' \
+        'actions=read&contents=read&issues=write&pull_requests=write&statuses=read'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+open_token_url() {
+  local url="$1"
+  if command -v open >/dev/null 2>&1; then
+    open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url"
+  else
+    return 1
+  fi
+}
+
 # A scope is either "owner/**" for a whole org or "owner/repo" for one repo.
 # Emit every URL form git might see, and for an exact repo emit both the bare
 # and .git-suffixed variants -- a clone made without the suffix does not match
@@ -1476,6 +1539,323 @@ cmd_provision() {
     note "On $machine, run: braden-dots identity sync && braden-dots identity ensure"
   fi
   return "$exit_code"
+}
+
+create_token_item() {
+  local title="$1" vault="$2" username="$3" token="$4"
+  local template payload
+  if ! template="$(op_run item template get "API Credential" --format json 2>/dev/null)"; then
+    fail "could not load the 1Password API Credential template"
+    return 1
+  fi
+  if ! payload="$(
+    jq \
+      --arg title "$title" \
+      --arg usernameField "$TOKEN_USER_FIELD" \
+      --arg username "$username" \
+      --arg tokenField "$TOKEN_FIELD" \
+      --rawfile token /dev/fd/3 '
+        .title = $title
+        | .fields = (
+            (.fields // [])
+            | map(
+                if (.id == $usernameField or .label == $usernameField) then
+                  .value = $username
+                elif (.id == $tokenField or .label == $tokenField) then
+                  .value = ($token | rtrimstr("\n"))
+                else
+                  .
+                end
+              )
+            | if any(.[]; .id == $usernameField or .label == $usernameField) then
+                .
+              else
+                . + [{
+                  id: $usernameField,
+                  label: $usernameField,
+                  type: "STRING",
+                  value: $username
+                }]
+              end
+            | if any(.[]; .id == $tokenField or .label == $tokenField) then
+                .
+              else
+                . + [{
+                  id: $tokenField,
+                  label: $tokenField,
+                  type: "CONCEALED",
+                  value: ($token | rtrimstr("\n"))
+                }]
+              end
+          )
+      ' 3<<<"$token" <<<"$template"
+  )"; then
+    fail "could not construct the 1Password token item"
+    return 1
+  fi
+
+  if printf '%s' "$payload" |
+    op_run item create --vault "$vault" - >/dev/null; then
+    pass "created $title in $vault"
+  else
+    fail "could not create $title in $vault"
+    unset payload
+    return 1
+  fi
+  unset payload
+}
+
+cmd_provision_token() {
+  require_command op || return 1
+  require_command gh || return 1
+  require_command jq || return 1
+
+  case "${1:-}" in
+    -h | --help)
+      note "usage: braden-dots identity provision-token <machine>"
+      note "       [--identity <slug>] --github-user <login> --target <owner/repo>"
+      note "       [--vault <vault>] [--profile pr-maintainer]"
+      note "       [--expires-in <days>] [--no-open] [--yes]"
+      return 0
+      ;;
+    "")
+      fail "provision-token requires a target machine"
+      return 2
+      ;;
+    -*)
+      fail "machine name cannot be an option: $1"
+      return 2
+      ;;
+  esac
+
+  local machine="$1"
+  shift
+  local slug="" vault="$VAULT" github_user="" target=""
+  local profile=pr-maintainer expires_in=30 no_open=0 confirmed=0
+  local identity_set=0 vault_set=0 user_set=0 target_set=0
+  while (($# > 0)); do
+    case "$1" in
+      --identity)
+        if [[ "$identity_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--identity needs exactly one slug"
+          return 2
+        fi
+        slug="$2"
+        identity_set=1
+        shift 2
+        ;;
+      --vault)
+        if [[ "$vault_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--vault needs exactly one vault name or ID"
+          return 2
+        fi
+        vault="$2"
+        vault_set=1
+        shift 2
+        ;;
+      --github-user)
+        if [[ "$user_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--github-user needs exactly one login"
+          return 2
+        fi
+        github_user="$2"
+        user_set=1
+        shift 2
+        ;;
+      --target)
+        if [[ "$target_set" -eq 1 || $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          fail "--target needs exactly one owner/repo"
+          return 2
+        fi
+        target="$2"
+        target_set=1
+        shift 2
+        ;;
+      --profile)
+        if (($# < 2)) || [[ -z "$2" ]]; then
+          fail "--profile requires a name"
+          return 2
+        fi
+        profile="$2"
+        shift 2
+        ;;
+      --expires-in)
+        if (($# < 2)) || [[ -z "$2" ]]; then
+          fail "--expires-in requires a day count"
+          return 2
+        fi
+        expires_in="$2"
+        shift 2
+        ;;
+      --no-open)
+        no_open=1
+        shift
+        ;;
+      --yes)
+        confirmed=1
+        shift
+        ;;
+      -h | --help)
+        note "usage: braden-dots identity provision-token <machine>"
+        note "       [--identity <slug>] --github-user <login> --target <owner/repo>"
+        note "       [--vault <vault>] [--profile pr-maintainer]"
+        note "       [--expires-in <days>] [--no-open] [--yes]"
+        return 0
+        ;;
+      *)
+        fail "unknown provision-token option or argument: $1"
+        return 2
+        ;;
+    esac
+  done
+
+  if ! valid_slug "$machine"; then
+    fail "machine names must start with a letter or number and contain only"
+    note "letters, numbers, dot, underscore and hyphen"
+    return 2
+  fi
+  if [[ "$identity_set" -eq 1 ]] && ! valid_slug "$slug"; then
+    fail "identity slugs must start with a letter or number and contain only"
+    note "letters, numbers, dot, underscore and hyphen"
+    return 2
+  fi
+  if [[ "$user_set" -eq 0 ]] || ! valid_github_user "$github_user"; then
+    fail "--github-user must be a GitHub login"
+    return 2
+  fi
+  if [[ "$target_set" -eq 0 ]] || ! valid_github_target "$target"; then
+    fail "--target must be one GitHub owner/repo"
+    return 2
+  fi
+  if [[ -z "$vault" ]]; then
+    fail "no target vault; pass --vault or run: braden-dots config edit"
+    return 1
+  fi
+  if ! token_profile_query "$profile" >/dev/null; then
+    fail "unsupported token profile: $profile"
+    note "Supported profiles: pr-maintainer"
+    return 2
+  fi
+  if ! [[ "$expires_in" =~ ^[0-9]+$ ]] ||
+    ((10#$expires_in < 1 || 10#$expires_in > 366)); then
+    fail "--expires-in must be between 1 and 366 days"
+    return 2
+  fi
+  expires_in=$((10#$expires_in))
+  if [[ "$BACKEND" == service-account ]]; then
+    fail "refusing to create tokens with a read-only service account"
+    note "Run provision-token on a machine authenticated through the 1Password app."
+    return 1
+  fi
+
+  local title probe probe_status=0
+  if [[ -n "$slug" ]]; then
+    title="$(account_item_title token "$machine" "$slug")"
+  else
+    title="$(machine_item_title token "$machine")"
+  fi
+  probe="$(op_run item get "$title" --vault "$vault" --format json 2>&1)" ||
+    probe_status=$?
+  if [[ "$probe_status" -eq 0 ]]; then
+    pass "already exists in $vault: $title"
+    note "No token was read or replaced."
+    return 0
+  fi
+  if ! grep -qiE "isn't an item|not found|no item matches" <<<"$probe"; then
+    fail "could not determine whether $title exists in $vault"
+    printf '%s\n' "$probe" | sed 's/^/     /' >&2
+    return 1
+  fi
+
+  local owner="${target%%/*}" repository="${target#*/}"
+  local permissions token_name description url
+  permissions="$(token_profile_query "$profile")" || return 1
+  token_name="braden-dots $machine${slug:+-$slug}"
+  token_name="${token_name:0:40}"
+  description="GitHub CLI for $machine; verify against $target"
+  url="https://github.com/settings/personal-access-tokens/new"
+  url+="?name=$(url_encode "$token_name")"
+  url+="&description=$(url_encode "$description")"
+  url+="&target_name=$(url_encode "$owner")"
+  url+="&expires_in=$expires_in"
+  url+="&$permissions"
+
+  note "This will request GitHub API access as '$github_user' for '$target'."
+  note "Profile '$profile' requests: Actions read, contents read, issues write,"
+  note "pull requests write, and commit statuses read."
+  note "GitHub still requires you to select only '$repository' in the browser."
+  note "The token will be stored as '$title' in '$vault'."
+  if ((confirmed == 0)); then
+    if [[ ! -t 0 ]]; then
+      fail "interactive confirmation is required; pass --yes only after reviewing the request"
+      return 1
+    fi
+    local reply
+    read -r -p "     Continue and open GitHub? [y/N] " reply
+    if [[ ! "$reply" =~ ^[Yy] ]]; then
+      note "Token provisioning cancelled."
+      return 1
+    fi
+  fi
+
+  if ((no_open == 0)); then
+    if open_token_url "$url"; then
+      pass "opened GitHub's prefilled fine-grained token form"
+    else
+      warn "could not open a browser; use this URL:"
+      printf '%s\n' "$url"
+    fi
+  else
+    note "Open this prefilled GitHub token form:"
+    printf '%s\n' "$url"
+  fi
+
+  note "Generate the token after reviewing its owner, repository, expiry and permissions."
+  note "Paste it below. Input is hidden and never placed in argv or shell history."
+  local token=""
+  if [[ -t 0 ]]; then
+    printf '     Token: ' >&2
+    IFS= read -r -s token || true
+    printf '\n' >&2
+  else
+    IFS= read -r token || true
+  fi
+  if [[ -z "$token" || "$token" == *[[:space:]]* ]]; then
+    fail "the token was empty or contained whitespace"
+    unset token
+    return 1
+  fi
+
+  local actual_user normalized_actual normalized_expected
+  if ! actual_user="$(
+    GH_TOKEN="$token" GH_HOST=github.com gh api user --jq .login 2>/dev/null
+  )" || [[ -z "$actual_user" ]]; then
+    fail "the supplied token could not authenticate to github.com"
+    unset token
+    return 1
+  fi
+  normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual_user")"
+  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$github_user")"
+  if [[ "$normalized_actual" != "$normalized_expected" ]]; then
+    fail "the supplied token authenticates as '$actual_user', expected '$github_user'"
+    unset token
+    return 1
+  fi
+  pass "token authenticates as the expected GitHub account: $actual_user"
+
+  create_token_item "$title" "$vault" "$actual_user" "$token" || {
+    unset token
+    return 1
+  }
+
+  if GH_TOKEN="$token" GH_HOST=github.com \
+    gh api "repos/$target" --jq .full_name >/dev/null 2>&1; then
+    pass "token can read the selected repository: $target"
+  else
+    warn "the token is stored, but cannot yet read $target"
+    note "Select the repository on the token, or wait for organization approval."
+  fi
+  unset token
 }
 
 cmd_sync_identities() {
@@ -2147,6 +2527,40 @@ read_token_username() {
   printf '%s' "$username"
 }
 
+load_verified_token() {
+  local title="$1" configured_user="$2"
+  local token_item_id expected_user actual_user
+  local normalized_configured normalized_expected normalized_actual
+
+  VERIFIED_TOKEN=""
+  VERIFIED_TOKEN_USER=""
+  token_item_id="$(resolve_token_item_id "$title")" || return 1
+  expected_user="$(read_token_username "$token_item_id" "$title")" || return 1
+  normalized_configured="$(tr '[:upper:]' '[:lower:]' <<<"$configured_user")"
+  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
+  if [[ -n "$configured_user" ]] &&
+    [[ "$normalized_configured" != "$normalized_expected" ]]; then
+    fail "$title is labeled for '$expected_user', but github.com is configured for '$configured_user'"
+    return 1
+  fi
+
+  VERIFIED_TOKEN="$(read_token_credential "$token_item_id" "$title")" || return 1
+  if ! actual_user="$(
+    GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com gh api user --jq .login 2>/dev/null
+  )" || [[ -z "$actual_user" ]]; then
+    fail "$title could not authenticate to github.com"
+    VERIFIED_TOKEN=""
+    return 1
+  fi
+  normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual_user")"
+  if [[ "$normalized_actual" != "$normalized_expected" ]]; then
+    fail "$title authenticates as '$actual_user', expected '$expected_user'"
+    VERIFIED_TOKEN=""
+    return 1
+  fi
+  VERIFIED_TOKEN_USER="$actual_user"
+}
+
 cmd_token() {
   # stdout carries only the token. A slug selects exactly one machine+identity
   # item; it must never fall back to the legacy unsuffixed item.
@@ -2186,6 +2600,82 @@ cmd_token() {
   local token_item_id
   token_item_id="$(resolve_token_item_id "$title")" || return 1
   read_token_credential "$token_item_id" "$title"
+}
+
+cmd_token_check() {
+  local repo="."
+  while (($# > 0)); do
+    case "$1" in
+      --repo)
+        if (($# < 2)) || [[ -z "$2" ]]; then
+          fail "--repo requires a path"
+          return 2
+        fi
+        repo="$2"
+        shift 2
+        ;;
+      --repo=*)
+        repo="${1#*=}"
+        if [[ -z "$repo" ]]; then
+          fail "--repo requires a path"
+          return 2
+        fi
+        shift
+        ;;
+      -h | --help)
+        note "usage: braden-dots identity token-check [--repo PATH]"
+        return 0
+        ;;
+      *)
+        fail "unknown token-check option or argument: $1"
+        return 2
+        ;;
+    esac
+  done
+
+  require_command op || return 1
+  require_command gh || return 1
+  require_vault || return 1
+  require_safe_machine || return 1
+  resolve_repo_github_account "$repo" || return 1
+
+  local target
+  target="$(identity_remote_target "$EFFECTIVE_REMOTE" 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
+    fail "could not derive owner/repo from the repository remote"
+    return 1
+  fi
+  load_verified_token "$RESOLVED_TOKEN_TITLE" "$RESOLVED_GITHUB_USER" || return 1
+  pass "token authenticates as the expected GitHub account: $VERIFIED_TOKEN_USER"
+
+  if ! GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com \
+    gh api "repos/$target" --jq .full_name >/dev/null 2>&1; then
+    fail "token cannot read $target"
+    note "The token may be pending organization approval or missing this repository."
+    VERIFIED_TOKEN=""
+    return 1
+  fi
+  pass "token can read the repository: $target"
+
+  if ! GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com \
+    gh api "repos/$target/actions/runs?per_page=1" --jq .total_count \
+      >/dev/null 2>&1; then
+    fail "token cannot read Actions runs for $target"
+    note "Recreate it with the pr-maintainer profile or inspect organization policy."
+    VERIFIED_TOKEN=""
+    return 1
+  fi
+  pass "token can read Actions runs for: $target"
+
+  if ! GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com \
+    gh api "repos/$target/pulls?per_page=1" --jq length >/dev/null 2>&1; then
+    fail "token cannot read pull requests for $target"
+    VERIFIED_TOKEN=""
+    return 1
+  fi
+  pass "token can read pull requests for: $target"
+  note "Write permissions are exercised only by the requested gh command."
+  VERIFIED_TOKEN=""
 }
 
 cmd_gh() {
@@ -2276,7 +2766,7 @@ cmd_gh() {
   require_vault || return 1
   require_safe_machine || return 1
 
-  local title configured_user token_item_id expected_user token actual_user
+  local title configured_user
   if [[ "$selector" == identity ]]; then
     title="$(account_item_title token "$MACHINE" "$slug")"
     configured_user=""
@@ -2286,38 +2776,15 @@ cmd_gh() {
     configured_user="$RESOLVED_GITHUB_USER"
   fi
 
-  token_item_id="$(resolve_token_item_id "$title")" || return 1
-  expected_user="$(read_token_username "$token_item_id" "$title")" || return 1
-
-  local normalized_configured normalized_expected
-  normalized_configured="$(tr '[:upper:]' '[:lower:]' <<<"$configured_user")"
-  normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
-  if [[ -n "$configured_user" ]] &&
-    [[ "$normalized_configured" != "$normalized_expected" ]]; then
-    fail "$title is labeled for '$expected_user', but github.com is configured for '$configured_user'"
-    return 1
-  fi
-
-  token="$(read_token_credential "$token_item_id" "$title")" || return 1
+  load_verified_token "$title" "$configured_user" || return 1
 
   # A non-empty GH_TOKEN takes precedence over gh's stored login. Pinning the
   # host and validating the token's account before the requested command makes
   # every failure closed: the ambient gh account is never considered.
-  if ! actual_user="$(
-    GH_TOKEN="$token" GH_HOST=github.com gh api user --jq .login 2>/dev/null
-  )" || [[ -z "$actual_user" ]]; then
-    fail "$title could not authenticate to github.com"
-    return 1
-  fi
-
-  local normalized_actual
-  normalized_actual="$(tr '[:upper:]' '[:lower:]' <<<"$actual_user")"
-  if [[ "$normalized_actual" != "$normalized_expected" ]]; then
-    fail "$title authenticates as '$actual_user', expected '$expected_user'"
-    return 1
-  fi
-
-  GH_TOKEN="$token" GH_HOST=github.com gh "$@"
+  local exit_code=0
+  GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com gh "$@" || exit_code=$?
+  VERIFIED_TOKEN=""
+  return "$exit_code"
 }
 
 main() {
@@ -2326,6 +2793,7 @@ main() {
   case "$command" in
     setup) cmd_setup "$@" ;;
     provision) cmd_provision "$@" ;;
+    provision-token) cmd_provision_token "$@" ;;
     store-token) cmd_store_token ;;
     status) cmd_status "$@" ;;
     ensure) cmd_ensure "$@" ;;
@@ -2339,6 +2807,7 @@ main() {
     load) cmd_load ;;
     unload) cmd_unload ;;
     gh) cmd_gh "$@" ;;
+    token-check) cmd_token_check "$@" ;;
     token) cmd_token "$@" ;;
     -h | --help | help) usage ;;
     *)

@@ -31,6 +31,10 @@ braden-dots identity gh --repo . -- <gh arguments...>
 This selects the default GitHub account unless the repository's generated
 identity route selects a separate account.
 
+Use `braden-dots identity token-check --repo .` for non-mutating API credential
+diagnostics. `provision-token` creates or authorizes account access and must
+never be run by an agent without the user's explicit confirmation.
+
 On work machines, managed keys expire from the agent after nine hours. A
 warning about permissive `.pub` files is usually misleading: public keys are
 expected to be readable, while the useful private halves exist only in the

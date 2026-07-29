@@ -84,8 +84,24 @@ be active.
 
 ## Optional GitHub API token
 
-For `gh` on a non-interactive account, create a short-lived fine-grained PAT.
-The default account uses the machine title:
+Provision a short-lived fine-grained PAT from a desktop-authenticated machine
+that can write to the target vault:
+
+```sh
+braden-dots identity provision-token <machine> \
+  --vault '<target vault>' \
+  --github-user <login> \
+  --target <owner/repo> \
+  --profile pr-maintainer
+```
+
+The command asks for confirmation, opens GitHub's prefilled token form, captures
+the resulting token without echoing it or placing it in argv, verifies its
+GitHub account, and sends it to 1Password over stdin. GitHub still requires the
+repository selection and any organization approval in its UI. Use
+`--identity <slug>` when provisioning a separate account.
+
+The default account is stored as:
 
 ```text
 Title:      GitHub Machine PAT (<machine>)
@@ -93,13 +109,19 @@ Username:   <GitHub login>
 Credential: <PAT>
 ```
 
-A separate account selected by an identity scope uses:
+Separate accounts use `GitHub Machine PAT (<machine> <slug>)`. Rerunning
+`provision-token` never reads, replaces, or duplicates an existing item.
+Delete or rename the old item deliberately before rotating it.
 
-```text
-Title:      GitHub Machine PAT (<machine> <slug>)
-Username:   <GitHub login>
-Credential: <PAT>
+On the target machine, verify the token without making a GitHub change:
+
+```sh
+braden-dots identity token-check --repo .
 ```
+
+This checks the token account plus repository, Actions-run, and pull-request
+read access. Organization approval may leave a newly created token unable to
+read the repository even though the token has already been stored.
 
 Run `gh` through the checked, repository-aware wrapper:
 
@@ -113,6 +135,10 @@ the matching machine-and-identity token. The wrapper rejects a mismatched SSH
 route and verifies the token’s account before running the requested command.
 Use `--identity <slug>` only when no repository route is available. The legacy
 positional form, `gh <slug> -- ...`, remains accepted.
+
+Fine-grained PATs currently do not support every GitHub API, including the
+Checks API. `token-check` covers the read paths used for Actions and pull
+requests, but the requested `gh` operation remains the final permission test.
 
 ## Retirement and limits
 

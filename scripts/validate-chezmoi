@@ -572,6 +572,7 @@ for agent_file in "${agent_files[@]}"; do
 	grep -Fq "\`github.com\` is intentionally routed to \`$ci_github_user\`" "$agent_file"
 	grep -Fq 'braden-dots identity status --repo . --json' "$agent_file"
 	grep -Fq 'braden-dots identity gh --repo . -- <gh arguments...>' "$agent_file"
+	grep -Fq 'braden-dots identity token-check --repo .' "$agent_file"
 	grep -Fq 'braden-dots source publish -m' "$agent_file"
 	grep -Fq 'nine hours' "$agent_file"
 done
