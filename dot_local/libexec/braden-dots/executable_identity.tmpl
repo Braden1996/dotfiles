@@ -1309,7 +1309,10 @@ valid_scope_list() {
 }
 
 valid_github_user() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]
+  # Enterprise Managed User logins may contain an underscore even though
+  # ordinary github.com usernames are limited to alphanumerics and hyphens.
+  # The token's actual /user login is still verified before anything is stored.
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
 valid_github_target() {

@@ -60,6 +60,7 @@ assert_tokens_not_logged() {
 		"$FAKE_STATE/gh-contexts" "$FAKE_STATE/gh-adds" "$FAKE_STATE/ssh-adds"; do
 		for token_value in \
 			fixture-default-correct \
+			fixture-managed-correct \
 			fixture-scoped-correct \
 			fixture-scoped-wrong \
 			fixture-legacy; do
@@ -417,6 +418,10 @@ fixture-default-correct)
 	token_context=default-correct
 	token_user=default-account
 	;;
+fixture-managed-correct)
+	token_context=managed-correct
+	token_user=braden-marshall_isembard
+	;;
 fixture-scoped-correct)
 	token_context=scoped-correct
 	token_user=Braden1996
@@ -662,10 +667,10 @@ test_identity_provision() {
 
 test_default_token_provision() {
 	new_case default-token-provision
-	printf '%s\n' fixture-scoped-correct |
+	printf '%s\n' fixture-managed-correct |
 		run_helper "$personal_helper" provision-token ci-work \
 			--vault "Target<>Vault" \
-			--github-user Braden1996 \
+			--github-user braden-marshall_isembard \
 			--target Isembard-Mason/mason-os \
 			--profile pr-maintainer \
 			--expires-in 30 \
@@ -675,8 +680,8 @@ test_default_token_provision() {
 		"$(item_count "GitHub Machine PAT (ci-work)" "Target<>Vault")" \
 		"default token provisioning should create the machine token item"
 	assert_contains "$FAKE_STATE/items" \
-		"|GitHub Machine PAT (ci-work)|Target<>Vault||||Braden1996|fixture-scoped-correct" \
-		"token item should contain the verified account and supplied credential"
+		"|GitHub Machine PAT (ci-work)|Target<>Vault||||braden-marshall_isembard|fixture-managed-correct" \
+		"token item should support and store a verified managed-user login"
 	assert_contains "$FAKE_STATE/browser-opens" \
 		"target_name=Isembard-Mason" \
 		"token provisioning should prefill the GitHub resource owner"
@@ -686,7 +691,7 @@ test_default_token_provision() {
 	assert_contains "$FAKE_STATE/browser-opens" \
 		"expires_in=30" \
 		"token provisioning should prefill a bounded expiration"
-	assert_not_contains "$FAKE_STATE/op-calls" fixture-scoped-correct \
+	assert_not_contains "$FAKE_STATE/op-calls" fixture-managed-correct \
 		"the token must reach 1Password over stdin rather than argv"
 	assert_tokens_not_logged
 }
