@@ -13,7 +13,7 @@ contains configuration and non-secret coordinates, never secret values.
 <!-- Do not edit by hand: run `mise run docs`. -->
 | Scope | Installed |
 | --- | --- |
-| Homebrew formulae · both | `antidote`, `bat`, `chezmoi`, `eza`, `fd`, `fish`, `fzf`, `gh`, `git`, `git-delta`, `gnupg`, `hyperfine`, `jq`, `mise`, `ripgrep`, `shellcheck`, `shfmt`, `starship`, `taplo`, `tmux`, `withgraphite/tap/graphite`, `yazi`, `zoxide`, `zsh` |
+| Homebrew formulae · both | `antidote`, `bat`, `chezmoi`, `direnv`, `eza`, `fd`, `fish`, `fzf`, `gh`, `git`, `git-delta`, `gnupg`, `hyperfine`, `jq`, `mise`, `ripgrep`, `shellcheck`, `shfmt`, `starship`, `taplo`, `tmux`, `withgraphite/tap/graphite`, `yazi`, `zoxide`, `zsh` |
 | Homebrew casks · both | `1password-cli`, `cursor`, `font-atkinson-hyperlegible`, `font-fira-code-nerd-font`, `ghostty` |
 | Homebrew · personal only | `1password` |
 | Homebrew · work only | — |

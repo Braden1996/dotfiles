@@ -77,6 +77,11 @@ if [[ "${BRADEN_ENABLE_MISE_HOOKS:-0}" == "1" ]]; then
   fi
 fi
 
+# Direnv (cached hook; reloads only when the binary changes)
+if (( $+commands[direnv] )); then
+  _cached_init direnv direnv hook zsh
+fi
+
 # -----------------------------------------------------------------------------
 # Android & Java (only export if installed)
 # -----------------------------------------------------------------------------

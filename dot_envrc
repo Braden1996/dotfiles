@@ -1,0 +1,13 @@
+# Activate the nearest repository-local Python environment automatically.
+# Set BRADEN_DISABLE_AUTO_VENV=1 to disable this behavior for a shell.
+if [[ "${BRADEN_DISABLE_AUTO_VENV:-0}" != "1" ]]; then
+  current_dir="$PWD"
+  while [[ "$current_dir" != "/" ]]; do
+    if [[ -x "$current_dir/venv/bin/python" ]]; then
+      export VIRTUAL_ENV="$current_dir/venv"
+      PATH_add "$VIRTUAL_ENV/bin"
+      break
+    fi
+    current_dir="$(dirname "$current_dir")"
+  done
+fi
