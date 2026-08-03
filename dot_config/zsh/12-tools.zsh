@@ -78,6 +78,9 @@ if [[ "${BRADEN_ENABLE_MISE_HOOKS:-0}" == "1" ]]; then
 fi
 
 # Direnv (cached hook; reloads only when the binary changes)
+# Suppress routine load/unload notices while preserving errors and activation.
+: "${DIRENV_LOG_FORMAT:=}"
+export DIRENV_LOG_FORMAT
 if (( $+commands[direnv] )); then
   _cached_init direnv direnv hook zsh
 fi
