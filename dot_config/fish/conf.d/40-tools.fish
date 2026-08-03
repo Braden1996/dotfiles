@@ -44,11 +44,6 @@ function __braden_cached_init --argument-names cache_name command_name
     source "$cache_file"
 end
 
-# Keep routine direnv load/unload notices quiet while preserving activation.
-if not set -q DIRENV_LOG_FORMAT
-    set -gx DIRENV_LOG_FORMAT ""
-end
-
 if status is-interactive; and isatty stdin; and isatty stdout
     if command -q direnv
         __braden_cached_init direnv-init direnv hook fish

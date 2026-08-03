@@ -1,0 +1,4 @@
+[global]
+# Suppress routine status messages such as "direnv: loading ~/.envrc".
+# Errors remain visible.
+log_filter = "^$"
