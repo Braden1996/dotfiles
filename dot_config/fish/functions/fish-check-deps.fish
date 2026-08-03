@@ -1,5 +1,5 @@
 function fish-check-deps
-    set -l required starship fzf mise
+    set -l required starship fzf mise direnv
     set -l optional eza bat yazi zoxide safe-chain
     set -l missing_required
     set -l missing_optional
