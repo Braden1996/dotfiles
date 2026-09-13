@@ -22,6 +22,7 @@ Specialist namespaces:
   source <command>             Inspect, commit, reconcile, and publish source
   identity <command>           Manage GitHub identities and agent keys
   secret <command>             Manage registered application secrets
+  dock status [--json]         Inspect CalDigit TS3 Plus and USB enumeration
   app flow-icons [--public]    Install or refresh Flow Icons
 
 Run `braden-dots <namespace> --help` for specialist commands.
@@ -52,6 +53,14 @@ main() {
 	source) run_module source "$@" ;;
 	identity) run_module identity "$@" ;;
 	secret) run_module secret "$@" ;;
+	dock)
+{{ if eq (includeTemplate "dock-enabled.tmpl" . | trim) "true" -}}
+		run_module dock "$@"
+{{ else -}}
+		printf 'Dock status is not enabled for this machine/profile.\n' >&2
+		return 1
+{{ end -}}
+		;;
 	app)
 		local app="${1:-}"
 		[[ $# -gt 0 ]] && shift

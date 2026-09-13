@@ -1,0 +1,11 @@
+{{- /* displayManagerModel is an optional fixture override. Runtime and launchd
+also check the real hardware, so rendering fixtures cannot bypass that gate. */ -}}
+{{- $enabled := false -}}
+{{- if and (eq .chezmoi.os "darwin") (eq .machineType "personal") -}}
+{{-   $model := get . "displayManagerModel" | default "" -}}
+{{-   if not $model -}}
+{{-     $model = output "/usr/sbin/sysctl" "-n" "hw.model" | trim -}}
+{{-   end -}}
+{{-   $enabled = eq $model "Mac17,2" -}}
+{{- end -}}
+{{- $enabled -}}

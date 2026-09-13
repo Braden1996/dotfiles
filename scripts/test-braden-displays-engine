@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+test_dir="$repo_root/scripts/display-tests"
+engine_dir=${BRADEN_DISPLAYS_ENGINE_DIR:-"$repo_root/dot_local/share/braden-displays"}
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/display-engine-tests.XXXXXX")
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+# Privacy/structure checks are portable; only the pure Foundation tests need
+# macOS. No live daemon, display API, monitor connection or GUI is required.
+python3 "$test_dir/decode-fixtures.py" "$temp_root/fixtures"
+if [[ "$(uname -s)" != Darwin ]]; then
+	echo "Skipping Objective-C display engine tests outside macOS."
+	exit 0
+fi
+
+for module in EDID XDR PolicyGuard; do
+	/usr/bin/clang -fobjc-arc -O2 -UNDEBUG -Wall -Wextra \
+		-framework Foundation -I "$engine_dir" \
+		"$engine_dir/$module.m" "$test_dir/${module}Tests.m" \
+		-o "$temp_root/$module-tests"
+done
+
+# ControllerTests includes Controller.m after replacing its IOKit and dynamic
+# loader calls. Refuse to run if a future change introduces an unmocked call.
+/usr/bin/clang -fobjc-arc -O2 -UNDEBUG -Wall -Wextra \
+	-framework Foundation -framework IOKit -I "$engine_dir" \
+	"$test_dir/ControllerTests.m" -o "$temp_root/Controller-tests"
+unmocked=$(/usr/bin/nm -u "$temp_root/Controller-tests" | awk '
+  $NF ~ /^_(IO[A-Z][[:alnum:]_]*|dlopen|dlsym|dlclose|clock_gettime|usleep)$/ { print $NF }
+')
+if [[ -n "$unmocked" ]]; then
+	printf 'Controller test has unmocked hardware/loader/clock imports:\n%s\n' "$unmocked" >&2
+	exit 1
+fi
+
+"$temp_root/EDID-tests" \
+	"$temp_root/fixtures/asus-original.bin" "$temp_root/fixtures/asus-cap144.bin"
+"$temp_root/XDR-tests" \
+	"$temp_root/fixtures/xdr-original.bin" "$temp_root/fixtures/xdr-cap60.bin"
+"$temp_root/PolicyGuard-tests"
+"$temp_root/Controller-tests"

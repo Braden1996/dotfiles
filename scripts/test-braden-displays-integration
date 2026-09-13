@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null
+command -v python3 >/dev/null
+
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/display-integration.XXXXXX")
+temp_root=$(cd "$temp_root" && pwd -P)
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+fixture_source="$temp_root/source"
+mkdir -p "$fixture_source/.chezmoitemplates" \
+	"$fixture_source/private_Library/LaunchAgents" \
+	"$fixture_source/dot_local/share/braden-displays"
+
+# Only the installation files under test are copied. No external archives,
+# account configuration, real user destinations, or live launchd jobs are used.
+cp "$repo_root/.chezmoiignore" "$fixture_source/"
+cp "$repo_root/.chezmoitemplates/display-manager-enabled.tmpl" \
+	"$fixture_source/.chezmoitemplates/"
+cp "$repo_root/.chezmoitemplates/dock-enabled.tmpl" "$fixture_source/.chezmoitemplates/"
+cp "$repo_root/private_Library/LaunchAgents/com.braden.displays.plist.tmpl" \
+	"$fixture_source/private_Library/LaunchAgents/"
+cp "$repo_root/run_onchange_after_30-display-manager.sh.tmpl" "$fixture_source/"
+for filename in main.m EDID.m EDID.h XDR.m XDR.h PolicyGuard.m PolicyGuard.h Controller.m Controller.h; do
+	cp "$repo_root/dot_local/share/braden-displays/$filename" \
+		"$fixture_source/dot_local/share/braden-displays/"
+done
+
+cm() {
+	"$chezmoi_bin" \
+		--source "$fixture_source" \
+		--destination "$case_home" \
+		--config "$case_config" \
+		--cache "$temp_root/cache" \
+		--persistent-state "$case_root/chezmoi.boltdb" \
+		--override-data "$case_overrides" \
+		--no-tty --refresh-externals=never "$@"
+}
+
+for fixture in \
+	'darwin personal Mac17,2 yes' \
+	'darwin work Mac17,2 no' \
+	'darwin personal Mac17,3 no' \
+	'darwin personal MacBookPro18,1 no' \
+	'linux personal Mac17,2 no'; do
+	read -r platform profile model expected <<<"$fixture"
+	case_root="$temp_root/$platform-$profile-$model"
+	# XML-sensitive characters also exercise the LaunchAgent path escaping.
+	case_home="$case_root/home & fixtures"
+	case_config="$case_root/chezmoi.toml"
+	mkdir -p "$case_home"
+	cat >"$case_config" <<EOF
+[data]
+machineType = "$profile"
+displayManagerModel = "$model"
+dockTestModel = "FixtureMac"
+EOF
+	case_overrides=$(
+		python3 - "$platform" "$case_home" <<'PY'
+import json
+import sys
+print(json.dumps({"chezmoi": {"os": sys.argv[1], "homeDir": sys.argv[2]}}))
+PY
+	)
+
+	cm apply --exclude scripts --force
+	cm apply --exclude scripts --force
+	cm verify --exclude scripts
+	if [[ -n "$(cm status --exclude scripts)" ]]; then
+		echo "Display integration left destination drift: $fixture" >&2
+		exit 1
+	fi
+	installer="$case_root/installer.sh"
+	cm execute-template --file \
+		"$fixture_source/run_onchange_after_30-display-manager.sh.tmpl" >"$installer"
+	bash -n "$installer"
+	if command -v shellcheck >/dev/null 2>&1; then
+		shellcheck --shell bash "$installer"
+	fi
+
+	plist="$case_home/Library/LaunchAgents/com.braden.displays.plist"
+	if [[ "$expected" == yes ]]; then
+		for filename in main.m EDID.m EDID.h XDR.m XDR.h PolicyGuard.m PolicyGuard.h Controller.m Controller.h; do
+			cmp "$fixture_source/dot_local/share/braden-displays/$filename" \
+				"$case_home/.local/share/braden-displays/$filename"
+		done
+		python3 - "$plist" "$case_home" <<'PY'
+import os
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as source:
+    agent = plistlib.load(source)
+assert agent["Label"] == "com.braden.displays"
+assert agent["ProgramArguments"] == [
+    os.path.join(sys.argv[2], ".local/libexec/braden-displays"), "run"
+], agent["ProgramArguments"]
+assert agent["LimitLoadToSessionType"] == "Aqua"
+assert agent["LimitLoadToHardware"] == {"model": ["Mac17,2"]}
+assert agent["RunAtLoad"] is True
+assert agent["KeepAlive"] == {"SuccessfulExit": False}
+assert agent["ThrottleInterval"] >= 30
+assert agent["ProcessType"] == "Background"
+assert "UserName" not in agent and "GroupName" not in agent
+PY
+		# Compilation and launch are deliberately reserved for a real graphical
+		# hardware test, never run from these disposable-home rendering checks.
+	else
+		[[ ! -e "$plist" ]]
+		[[ ! -e "$case_home/.local/share/braden-displays" ]]
+		bash "$installer"
+	fi
+	[[ ! -e "$case_home/.local/libexec/braden-displays" ]]
+done
+
+echo "validated display integration gates and user LaunchAgent"

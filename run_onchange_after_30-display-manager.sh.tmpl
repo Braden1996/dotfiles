@@ -1,0 +1,86 @@
+#!/bin/bash
+set -euo pipefail
+
+{{ if eq (includeTemplate "display-manager-enabled.tmpl" . | trim) "true" -}}
+# main source: {{ include "dot_local/share/braden-displays/main.m" | sha256sum }}
+# EDID source: {{ include "dot_local/share/braden-displays/EDID.m" | sha256sum }}
+# EDID header: {{ include "dot_local/share/braden-displays/EDID.h" | sha256sum }}
+# XDR source: {{ include "dot_local/share/braden-displays/XDR.m" | sha256sum }}
+# XDR header: {{ include "dot_local/share/braden-displays/XDR.h" | sha256sum }}
+# policy guard source: {{ include "dot_local/share/braden-displays/PolicyGuard.m" | sha256sum }}
+# policy guard header: {{ include "dot_local/share/braden-displays/PolicyGuard.h" | sha256sum }}
+# controller source: {{ include "dot_local/share/braden-displays/Controller.m" | sha256sum }}
+# controller header: {{ include "dot_local/share/braden-displays/Controller.h" | sha256sum }}
+# launch agent: {{ include "private_Library/LaunchAgents/com.braden.displays.plist.tmpl" | sha256sum }}
+
+# Keep a second hardware gate at execution time in case a rendered script is
+# copied to another machine. The engine and launchd independently gate too.
+if [[ "$(/usr/bin/uname -s)" != "Darwin" ]] ||
+  [[ "$(/usr/sbin/sysctl -n hw.model)" != "Mac17,2" ]]; then
+  exit 0
+fi
+if [[ "$EUID" -eq 0 ]]; then
+  echo "The display manager must be installed as the logged-in user, without sudo." >&2
+  exit 1
+fi
+
+source_dir={{ joinPath .chezmoi.homeDir ".local/share/braden-displays" | quote }}
+binary={{ joinPath .chezmoi.homeDir ".local/libexec/braden-displays" | quote }}
+plist={{ joinPath .chezmoi.homeDir "Library/LaunchAgents/com.braden.displays.plist" | quote }}
+domain="gui/$EUID"
+service="$domain/com.braden.displays"
+
+/usr/bin/plutil -lint "$plist" >/dev/null
+if ! /usr/bin/xcrun --find clang >/dev/null 2>&1; then
+  echo "Apple command-line tools are required to build the display manager." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$binary")"
+build_path=$(mktemp "$(dirname "$binary")/.braden-displays.XXXXXX")
+trap 'rm -f "$build_path"' EXIT INT TERM
+/usr/bin/clang -fobjc-arc -O2 \
+  -framework Foundation -framework AppKit -framework IOKit -framework CoreGraphics \
+  "$source_dir/main.m" "$source_dir/EDID.m" "$source_dir/XDR.m" \
+  "$source_dir/PolicyGuard.m" "$source_dir/Controller.m" -o "$build_path"
+chmod 755 "$build_path"
+mv -f "$build_path" "$binary"
+
+# A headless apply still installs everything for the next graphical login.
+# Never bootstrap a system daemon or another user's graphical session.
+if /bin/launchctl print "$domain" >/dev/null 2>&1; then
+  if /bin/launchctl print "$service" >/dev/null 2>&1; then
+    /bin/launchctl bootout "$service"
+  fi
+  /bin/launchctl bootstrap "$domain" "$plist"
+  echo "Display manager built and started for this graphical session."
+else
+  echo "Display manager built; it will start at the next graphical login."
+fi
+{{ else -}}
+# Retire a previous installation if this machine changes profile. Fresh
+# unsupported systems do nothing, and only this manager's target paths are
+# removed; the Chezmoi source repository is never touched.
+source_dir={{ joinPath .chezmoi.homeDir ".local/share/braden-displays" | quote }}
+binary={{ joinPath .chezmoi.homeDir ".local/libexec/braden-displays" | quote }}
+plist={{ joinPath .chezmoi.homeDir "Library/LaunchAgents/com.braden.displays.plist" | quote }}
+if [[ ! -e "$binary" && ! -e "$plist" && ! -d "$source_dir" ]]; then
+  exit 0
+fi
+if [[ "$EUID" -eq 0 ]]; then
+  echo "The display manager must be removed as its user, without sudo." >&2
+  exit 1
+fi
+if [[ "$(/usr/bin/uname -s)" == "Darwin" ]]; then
+  service="gui/$EUID/com.braden.displays"
+  if /bin/launchctl print "$service" >/dev/null 2>&1; then
+    /bin/launchctl bootout "$service"
+  fi
+  if [[ -x "$binary" ]]; then
+    "$binary" restore
+  fi
+fi
+rm -f "$binary" "$plist"
+rm -rf "$source_dir"
+echo "Removed the display manager from this unsupported machine/profile."
+{{ end -}}

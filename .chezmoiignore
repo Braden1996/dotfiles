@@ -18,6 +18,16 @@ Library/**
 .local/libexec/braden-dots/jsonc-setting.cjs
 {{ end }}
 
+{{ if ne (includeTemplate "display-manager-enabled.tmpl" . | trim) "true" }}
+.local/share/braden-displays/**
+Library/LaunchAgents/com.braden.displays.plist
+{{ end }}
+
+{{ if ne (includeTemplate "dock-enabled.tmpl" . | trim) "true" }}
+.local/libexec/braden-dots/dock
+.local/share/braden-dock/**
+{{ end }}
+
 {{/*
 No key material is templated. ~/.ssh/id_github_auth.pub, id_github_sign.pub and
 allowed_signers are all written at runtime by `braden-dots identity sync` from the

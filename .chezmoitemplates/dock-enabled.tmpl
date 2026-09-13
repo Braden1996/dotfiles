@@ -1,0 +1,11 @@
+{{- /* Only tests provide dockTestModel. The installed wrapper always reads the
+real model again, so fixture rendering cannot bypass its execution gate. */ -}}
+{{- $enabled := false -}}
+{{- if eq .chezmoi.os "darwin" -}}
+{{-   $model := get . "dockTestModel" | default "" -}}
+{{-   if not $model -}}
+{{-     $model = output "/usr/sbin/sysctl" "-n" "hw.model" | trim -}}
+{{-   end -}}
+{{-   $enabled = or (and (eq .machineType "personal") (eq $model "Mac17,2")) (and (eq .machineType "work") (eq $model "Mac17,8")) -}}
+{{- end -}}
+{{- $enabled -}}

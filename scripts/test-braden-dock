@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+chezmoi_bin=${CHEZMOI_BIN:-chezmoi}
+command -v "$chezmoi_bin" >/dev/null
+temp_root=$(mktemp -d "${TMPDIR:-/tmp}/dock-tests.XXXXXX")
+temp_root=$(cd "$temp_root" && pwd -P)
+trap 'rm -rf "$temp_root"' EXIT INT TERM
+
+fixture_source="$temp_root/source"
+mkdir -p "$fixture_source/.chezmoitemplates" "$fixture_source/dot_local/bin" \
+	"$fixture_source/dot_local/libexec/braden-dots" "$fixture_source/dot_local/share/braden-dock"
+cp "$repo_root/.chezmoiignore" "$fixture_source/"
+cp "$repo_root/.chezmoitemplates/display-manager-enabled.tmpl" "$fixture_source/.chezmoitemplates/"
+cp "$repo_root/.chezmoitemplates/dock-enabled.tmpl" "$fixture_source/.chezmoitemplates/"
+cp "$repo_root/dot_local/bin/executable_braden-dots.tmpl" "$fixture_source/dot_local/bin/"
+cp "$repo_root/dot_local/libexec/braden-dots/executable_dock.tmpl" "$fixture_source/dot_local/libexec/braden-dots/"
+for name in main.m Health.m Health.h; do
+	cp "$repo_root/dot_local/share/braden-dock/$name" "$fixture_source/dot_local/share/braden-dock/"
+done
+
+cm() {
+	"$chezmoi_bin" --source "$fixture_source" --destination "$case_home" \
+		--config "$case_config" --cache "$temp_root/cache" \
+		--persistent-state "$case_root/chezmoi.boltdb" --override-data "$overrides" \
+		--no-tty --refresh-externals=never "$@"
+}
+
+for fixture in \
+	'darwin personal Mac17,2 yes' \
+	'darwin work Mac17,8 yes' \
+	'darwin personal Mac17,8 no' \
+	'darwin work Mac17,2 no' \
+	'darwin personal Mac99,1 no' \
+	'darwin work Mac99,1 no' \
+	'linux personal Mac17,2 no' \
+	'linux work Mac17,8 no'; do
+	read -r platform profile model enabled <<<"$fixture"
+	case_root="$temp_root/$platform-$profile-$model"
+	case_home="$case_root/home & fixtures"
+	case_config="$case_root/config.toml"
+	mkdir -p "$case_home"
+	cat >"$case_config" <<EOF
+[data]
+machineType = "$profile"
+displayManagerModel = "FixtureMac"
+dockTestModel = "$model"
+EOF
+	overrides=$(
+		python3 - "$platform" "$case_home" <<'PY'
+import json
+import sys
+print(json.dumps({"chezmoi": {"os": sys.argv[1], "homeDir": sys.argv[2]}}))
+PY
+	)
+	cm apply --exclude scripts --force
+	cm apply --exclude scripts --force
+	cm verify --exclude scripts
+	[[ -z "$(cm status --exclude scripts)" ]]
+	module="$case_home/.local/libexec/braden-dots/dock"
+	facade="$case_home/.local/bin/braden-dots"
+	bash -n "$facade"
+	if [[ "$enabled" == yes ]]; then
+		[[ -x "$module" ]]
+		for name in main.m Health.m Health.h; do
+			cmp "$repo_root/dot_local/share/braden-dock/$name" "$case_home/.local/share/braden-dock/$name"
+		done
+		bash -n "$module"
+		if command -v shellcheck >/dev/null 2>&1; then shellcheck "$module" "$facade"; fi
+		BRADEN_DOTS_LIBEXEC="$(dirname "$module")" "$facade" dock --help >"$case_root/help.txt"
+		rg -q 'changes no hardware or settings' "$case_root/help.txt"
+		if "$module" status --json --unexpected >"$case_root/bad.txt" 2>&1; then
+			echo "Dock wrapper accepted an unsupported option" >&2
+			exit 1
+		fi
+		if [[ "$(uname -s)" == Darwin ]]; then
+			# A stale module must use the updated common profile and stop before
+			# building. Remove its fixture input so a regression cannot run a probe.
+			printf 'readonly DOTS_PROFILE=unsupported-fixture-profile\n' >"$(dirname "$module")/lib.sh"
+			rm "$case_home/.local/share/braden-dock/main.m"
+			if XDG_CACHE_HOME="$case_root/runtime-cache" "$module" status >"$case_root/runtime-gate.txt" 2>&1; then
+				echo "Dock wrapper ignored the current shared machine profile" >&2
+				exit 1
+			fi
+			rg -q 'not enabled for this machine/profile' "$case_root/runtime-gate.txt"
+			[[ ! -e "$case_root/runtime-cache" ]]
+		fi
+	else
+		[[ ! -e "$module" && ! -e "$case_home/.local/share/braden-dock" ]]
+		if BRADEN_DOTS_LIBEXEC="$(dirname "$module")" "$facade" dock status >"$case_root/unsupported.txt" 2>&1; then
+			echo "Dock command unexpectedly succeeded on an unsupported machine/profile" >&2
+			exit 1
+		fi
+		rg -q 'not enabled for this machine/profile' "$case_root/unsupported.txt"
+	fi
+	[[ ! -e "$case_home/Library/LaunchAgents" && ! -e "$case_home/.cache" ]]
+done
+echo "Dock gate tests passed: exact personal/work Mac pairs, mismatch/new-machine/Linux exclusions and no startup job."
+
+if [[ "$(uname -s)" != Darwin ]]; then
+	echo "Skipping native dock reader tests outside macOS."
+	exit 0
+fi
+
+engine_dir="$repo_root/dot_local/share/braden-dock"
+test_dir="$repo_root/scripts/dock-tests"
+/usr/bin/clang -fobjc-arc -O2 -Wall -Wextra -Werror \
+	-framework Foundation -framework IOKit "$engine_dir/main.m" "$engine_dir/Health.m" \
+	-o "$temp_root/dock-status"
+# The real reader can import only registry reads, matching and reference counts.
+# Its --help path returns before querying IOKit.
+unapproved=$(/usr/bin/nm -u "$temp_root/dock-status" | awk '
+  $NF ~ /^_IO/ && $NF !~ /^_(IOServiceMatching|IOServiceGetMatchingServices|IOIteratorNext|IOIteratorIsValid|IOObjectRetain|IOObjectRelease|IOObjectGetClass|IOObjectConformsTo|IORegistryEntryGetName|IORegistryEntryGetRegistryEntryID|IORegistryEntryCreateCFProperty|IORegistryEntryGetParentEntry|IORegistryEntryFromPath)$/ { print $NF }
+')
+if [[ -n "$unapproved" ]]; then
+	printf 'Unapproved IOKit imports in dock reader:\n%s\n' "$unapproved" >&2
+	exit 1
+fi
+"$temp_root/dock-status" --help >/dev/null
+
+/usr/bin/clang -fobjc-arc -O2 -UNDEBUG -Wall -Wextra -Werror \
+	-framework Foundation -I "$engine_dir" "$engine_dir/Health.m" "$test_dir/HealthTests.m" \
+	-o "$temp_root/health-tests"
+/usr/bin/clang -fobjc-arc -O2 -UNDEBUG -Wall -Wextra -Werror \
+	-framework Foundation -framework IOKit -I "$engine_dir" \
+	"$engine_dir/Health.m" "$test_dir/RegistryTests.m" -o "$temp_root/registry-tests"
+unmocked=$(/usr/bin/nm -u "$temp_root/registry-tests" | awk '$NF ~ /^_IO/ { print $NF }')
+if [[ -n "$unmocked" ]]; then
+	printf 'Unmocked IOKit imports in dock test:\n%s\n' "$unmocked" >&2
+	exit 1
+fi
+"$temp_root/health-tests"
+"$temp_root/registry-tests"

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.braden.displays</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ joinPath .chezmoi.homeDir ".local/libexec/braden-displays" | html }}</string>
+    <string>run</string>
+  </array>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>LimitLoadToHardware</key>
+  <dict>
+    <key>model</key>
+    <array>
+      <string>Mac17,2</string>
+    </array>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

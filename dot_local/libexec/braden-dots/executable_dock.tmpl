@@ -1,0 +1,87 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: braden-dots dock status [--json]
+
+Inspect CalDigit TS3 Plus transport, USB controllers and USB enumeration.
+This reads public IOKit registry properties and changes no hardware or settings.
+Enumeration does not verify keyboard input, mouse input or other device I/O.
+USAGE
+}
+
+command=${1:-help}
+[[ $# -eq 0 ]] || shift
+case "$command" in
+  help|-h|--help)
+    usage
+    exit 0
+    ;;
+  status)
+    if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--json" ) ]]; then
+      usage >&2
+      exit 2
+    fi
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$(uname -s)" != Darwin ]]; then
+  echo "Dock status is available on macOS." >&2
+  exit 1
+fi
+shared_lib="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -r "$shared_lib" ]]; then
+  echo "Shared dotfiles configuration is missing; run braden-dots apply." >&2
+  exit 1
+fi
+# The shared file refreshes even when a profile change excludes this module.
+# Read its current profile rather than trusting an old copied/rendered wrapper.
+# shellcheck source=/dev/null
+source "$shared_lib"
+profile=$DOTS_PROFILE
+model=$(/usr/sbin/sysctl -n hw.model)
+case "$profile/$model" in
+  personal/Mac17,2|work/Mac17,8) ;;
+  *)
+    echo "Dock status is not enabled for this machine/profile." >&2
+    exit 1
+    ;;
+esac
+
+source_dir={{ joinPath .chezmoi.homeDir ".local/share/braden-dock" | quote }}
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/braden-dots/dock"
+binary="$cache_dir/dock-status"
+stamp="$cache_dir/source.sha256"
+fingerprint=$(
+  {
+    /usr/bin/sw_vers -buildVersion
+    /usr/bin/uname -m
+    /usr/bin/shasum -a 256 "$source_dir/main.m" "$source_dir/Health.m" "$source_dir/Health.h"
+  } | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+)
+
+if [[ ! -x "$binary" || ! -r "$stamp" || "$(cat "$stamp")" != "$fingerprint" ]]; then
+  if ! /usr/bin/xcrun --find clang >/dev/null 2>&1; then
+    echo "Apple command-line tools are required for the first dock status run." >&2
+    exit 1
+  fi
+  mkdir -p "$cache_dir"
+  build_dir=$(mktemp -d "$cache_dir/.build.XXXXXX")
+  trap 'rm -rf "$build_dir"' EXIT INT TERM
+  /usr/bin/clang -fobjc-arc -O2 -Wall -Wextra -Werror \
+    -framework Foundation -framework IOKit \
+    "$source_dir/main.m" "$source_dir/Health.m" -o "$build_dir/dock-status"
+  chmod 755 "$build_dir/dock-status"
+  printf '%s\n' "$fingerprint" >"$build_dir/source.sha256"
+  mv -f "$build_dir/dock-status" "$binary"
+  mv -f "$build_dir/source.sha256" "$stamp"
+  rm -rf "$build_dir"
+  trap - EXIT INT TERM
+fi
+
+exec "$binary" "$@"

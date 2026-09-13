@@ -109,6 +109,7 @@ After a successful continuation, rerun `braden-dots source publish`.
 | Check / apply updates | `braden-dots update --check` · `braden-dots update` |
 | Summarize machine state | `braden-dots status` |
 | Diagnose workstation/project | `braden-dots doctor [--project PATH]` |
+| Inspect CalDigit dock/USB enumeration | `braden-dots dock status [--json]` |
 
 ## Credential model
 
@@ -126,3 +127,12 @@ After a successful continuation, rerun `braden-dots source publish`.
 
 Details: [GitHub credentials](docs/credentials.md) ·
 [application secrets](docs/secrets.md).
+
+The personal base M5 also has a native [external display manager](docs/displays.md)
+for the Studio Display XDR and ASUS PG27UCWM. Installation is limited to
+`Mac17,2`; work machines and other models do not run it.
+
+The personal `Mac17,2` and work `Mac17,8` profiles include on-demand
+[CalDigit TS3 Plus diagnostics](docs/dock.md), gated by the detected system model.
+The command reports dock and USB enumeration without changing hardware; it does
+not establish that attached peripherals work or repair intermittent connectivity.

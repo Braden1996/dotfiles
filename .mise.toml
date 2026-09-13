@@ -45,6 +45,17 @@ run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-id
 description = "Exercise staged Flow Icons updates with a fixture licence"
 run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-flow-icons"
 
+[tasks."check:displays"]
+description = "Validate display installation gates and pure EDID transformations"
+run = [
+  "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-displays-integration",
+  "scripts/test-braden-displays-engine",
+]
+
+[tasks."check:dock"]
+description = "Validate read-only dock diagnostics, attribution and both macOS profiles"
+run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dock"
+
 [tasks."check:secret"]
 description = "Exercise braden-dots secret without exposing fixture values"
 run = "CHEZMOI_BIN=\"$(mise where chezmoi)/chezmoi\" scripts/test-braden-dots-secret"
@@ -67,8 +78,8 @@ run = [
 [tasks."check:scripts"]
 description = "Lint repository validation scripts"
 run = [
-  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons",
-  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons",
+  "shellcheck scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons scripts/test-braden-displays-integration scripts/test-braden-displays-engine scripts/test-braden-dock",
+  "shfmt --diff --language-dialect bash scripts/validate-chezmoi scripts/generate-docs scripts/test-braden-dots scripts/test-braden-dots-identity scripts/test-braden-dots-secret scripts/test-braden-dots-flow-icons scripts/test-braden-displays-integration scripts/test-braden-displays-engine scripts/test-braden-dock",
 ]
 
 [tasks."check:secrets"]
@@ -80,7 +91,7 @@ run = [
 
 [tasks."check:static"]
 description = "Run fast, platform-independent checks"
-depends = ["check:actions", "check:braden-dots", "check:data", "check:docs", "check:flow-icons", "check:identity", "check:secret", "check:lua", "check:scripts", "check:secrets"]
+depends = ["check:actions", "check:braden-dots", "check:data", "check:displays", "check:dock", "check:docs", "check:flow-icons", "check:identity", "check:secret", "check:lua", "check:scripts", "check:secrets"]
 
 [tasks.check]
 description = "Run the complete local validation suite"
