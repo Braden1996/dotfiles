@@ -70,7 +70,7 @@ PY
 		bash -n "$module"
 		if command -v shellcheck >/dev/null 2>&1; then shellcheck "$module" "$facade"; fi
 		BRADEN_DOTS_LIBEXEC="$(dirname "$module")" "$facade" dock --help >"$case_root/help.txt"
-		rg -q 'changes no hardware or settings' "$case_root/help.txt"
+		grep -Fq 'changes no hardware or settings' "$case_root/help.txt"
 		if "$module" status --json --unexpected >"$case_root/bad.txt" 2>&1; then
 			echo "Dock wrapper accepted an unsupported option" >&2
 			exit 1
@@ -84,7 +84,7 @@ PY
 				echo "Dock wrapper ignored the current shared machine profile" >&2
 				exit 1
 			fi
-			rg -q 'not enabled for this machine/profile' "$case_root/runtime-gate.txt"
+			grep -Fq 'not enabled for this machine/profile' "$case_root/runtime-gate.txt"
 			[[ ! -e "$case_root/runtime-cache" ]]
 		fi
 	else
@@ -93,7 +93,7 @@ PY
 			echo "Dock command unexpectedly succeeded on an unsupported machine/profile" >&2
 			exit 1
 		fi
-		rg -q 'not enabled for this machine/profile' "$case_root/unsupported.txt"
+		grep -Fq 'not enabled for this machine/profile' "$case_root/unsupported.txt"
 	fi
 	[[ ! -e "$case_home/Library/LaunchAgents" && ! -e "$case_home/.cache" ]]
 done

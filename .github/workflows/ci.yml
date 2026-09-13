@@ -99,10 +99,9 @@ jobs:
 
       - name: Install validation dependencies
         run: |
-          brew install --formula tmux ripgrep
+          brew install --formula tmux
           brew install --cask ghostty
           command -v tmux
-          command -v rg
           test -x /Applications/Ghostty.app/Contents/MacOS/ghostty
 
       - name: Install mise
