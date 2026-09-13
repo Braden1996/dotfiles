@@ -138,7 +138,10 @@ cmd_sync() {
 
 managed_drift() {
 	local output
-	output="$("$DOTS_CHEZMOI" status 2>/dev/null || true)"
+	if ! output="$("$DOTS_CHEZMOI" status 2>/dev/null)"; then
+		dots_fail "could not inspect managed targets; drift is unknown"
+		return 1
+	fi
 	if [[ -n "$output" ]]; then
 		printf '%s\n' "$output" | awk 'NF { count++ } END { print count + 0 }'
 	else
@@ -181,12 +184,15 @@ parse_status_options() {
 
 cmd_status_json() {
 	dots_require_command jq || return 1
-	local source_json identity_json drift identity_args=()
+	local source_json identity_json drift drift_checked=true identity_args=()
 	source_json="$("$MODULE_DIR/source" status --json)" || return 1
 	[[ -n "$STATUS_REPO" ]] && identity_args=(--repo "$STATUS_REPO")
 	identity_json="$("$MODULE_DIR/identity" status "${identity_args[@]+"${identity_args[@]}"}" --json)" ||
 		return 1
-	drift="$(managed_drift)"
+	if ! drift="$(managed_drift)"; then
+		drift=null
+		drift_checked=false
+	fi
 
 	jq -n \
 		--arg profile "$DOTS_PROFILE" \
@@ -196,6 +202,7 @@ cmd_status_json() {
 		--arg gitEmail "$DOTS_DEFAULT_EMAIL" \
 		--arg githubUser "$DOTS_DEFAULT_GITHUB_USER" \
 		--argjson drift "$drift" \
+		--argjson driftChecked "$drift_checked" \
 		--argjson sourceReport "$source_json" \
 		--argjson identityReport "$identity_json" '
       {
@@ -212,7 +219,8 @@ cmd_status_json() {
         },
         source: $sourceReport.source,
         managedState: {
-          drifted: ($drift > 0),
+          checked: $driftChecked,
+          drifted: (if $driftChecked then ($drift > 0) else null end),
           driftCount: $drift
         },
         credentials: $identityReport.credentials,
@@ -222,14 +230,16 @@ cmd_status_json() {
           command: "braden-dots update --check"
         },
         issues: (
-          ($sourceReport.issues + $identityReport.issues) | unique
+          ($sourceReport.issues + $identityReport.issues
+            + (if $driftChecked then [] else ["managed_state_check_failed"] end)) | unique
         )
       }
-    '
+    ' || return 1
+	[[ "$drift_checked" == true ]]
 }
 
 cmd_status_human() {
-	local drift identity_args=()
+	local drift status=0 identity_args=()
 	printf 'Machine\n'
 	dots_note "name:              $DOTS_MACHINE"
 	dots_note "profile:           $DOTS_PROFILE"
@@ -238,11 +248,12 @@ cmd_status_human() {
 	dots_note "github.com login:   ${DOTS_DEFAULT_GITHUB_USER:-<unset>}"
 
 	printf '\n'
-	"$MODULE_DIR/source" status || true
+	"$MODULE_DIR/source" status || status=1
 
 	printf '\nManaged targets\n'
-	drift="$(managed_drift)"
-	if ((drift == 0)); then
+	if ! drift="$(managed_drift)"; then
+		status=1
+	elif ((drift == 0)); then
 		dots_pass "managed targets match the current source"
 	else
 		dots_warn "$drift managed target(s) differ; review with: chezmoi status"
@@ -250,10 +261,11 @@ cmd_status_human() {
 
 	printf '\nCredentials\n'
 	[[ -n "$STATUS_REPO" ]] && identity_args=(--repo "$STATUS_REPO")
-	"$MODULE_DIR/identity" status "${identity_args[@]+"${identity_args[@]}"}" || true
+	"$MODULE_DIR/identity" status "${identity_args[@]+"${identity_args[@]}"}" || status=1
 
 	printf '\nUpdates\n'
 	dots_note "inspect available updates with: braden-dots update --check"
+	return "$status"
 }
 
 cmd_status() {

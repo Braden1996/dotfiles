@@ -77,7 +77,8 @@ EOF
 	for template in \
 		dot_local/libexec/braden-dots/lib.sh.tmpl \
 		dot_local/libexec/braden-dots/executable_source.tmpl \
-		dot_local/libexec/braden-dots/executable_core.tmpl; do
+		dot_local/libexec/braden-dots/executable_core.tmpl \
+		dot_local/libexec/braden-dots/executable_doctor.tmpl; do
 		output="${template##*/}"
 		output="${output#executable_}"
 		output="${output%.tmpl}"
@@ -94,7 +95,7 @@ EOF
 		--no-tty \
 		--source "$repo_root" \
 		--file "$repo_root/dot_local/bin/executable_braden-dots.tmpl" >"$RENDER_BIN"
-	chmod +x "$RENDER_BIN" "$RENDER_LIBEXEC/source" "$RENDER_LIBEXEC/core"
+	chmod +x "$RENDER_BIN" "$RENDER_LIBEXEC/source" "$RENDER_LIBEXEC/core" "$RENDER_LIBEXEC/doctor"
 }
 
 render_suite personal Braden1996
@@ -167,7 +168,13 @@ printf '%s\n' "$*" >>"$FAKE_STATE/chezmoi-calls"
 case "${1:-}" in
 source-path) printf '%s\n' "$BRADEN_DOTS_SOURCE" ;;
 apply) ;;
-status) printf '%s' "${FAKE_CHEZMOI_STATUS:-}" ;;
+status)
+	printf '%s' "${FAKE_CHEZMOI_STATUS:-}"
+	if [[ "${FAKE_CHEZMOI_STATUS_EXIT:-0}" != 0 ]]; then
+		printf 'fixture template evaluation failed\n' >&2
+		exit "$FAKE_CHEZMOI_STATUS_EXIT"
+	fi
+	;;
 init) ;;
 *) exit 0 ;;
 esac
@@ -277,6 +284,8 @@ run_core() {
 		BRADEN_DOTS_CHEZMOI="$fake_bin/chezmoi" \
 		BRADEN_DOTS_IDENTITY_COMMAND="$personal_libexec/identity" \
 		BRADEN_DOTS_SKIP_SSH_TEST=1 \
+		FAKE_CHEZMOI_STATUS="${FAKE_CHEZMOI_STATUS:-}" \
+		FAKE_CHEZMOI_STATUS_EXIT="${FAKE_CHEZMOI_STATUS_EXIT:-0}" \
 		"$personal_libexec/core" "$@"
 }
 
@@ -596,6 +605,85 @@ EOF
 	fi
 }
 
+test_managed_status_failures() {
+	new_fixture managed-status-failure
+	local output="$FIXTURE_ROOT/status.json"
+	if FAKE_CHEZMOI_STATUS_EXIT=9 run_core status --json >"$output" 2>"$FIXTURE_ROOT/stderr"; then
+		fail "failed managed-state lookup must return nonzero for JSON status"
+	fi
+	assert_json "$output" \
+		'.managedState.checked == false and .managedState.drifted == null
+		 and .managedState.driftCount == null
+		 and (.issues | index("managed_state_check_failed"))' \
+		"failed drift inspection should be unknown, not zero"
+	assert_contains "$FIXTURE_ROOT/stderr" 'drift is unknown' \
+		"failed status lookup should explain unavailable drift"
+	if FAKE_CHEZMOI_STATUS_EXIT=9 run_core status >"$FIXTURE_ROOT/human" 2>&1; then
+		fail "failed managed-state lookup must return nonzero for human status"
+	fi
+	if grep -Fq 'managed targets match' "$FIXTURE_ROOT/human"; then
+		fail "failed lookup must not claim that managed targets match"
+	fi
+	FAKE_CHEZMOI_STATUS=$' M .zshrc\n' run_core status --json >"$output"
+	assert_json "$output" \
+		'.managedState.checked == true and .managedState.drifted == true and .managedState.driftCount == 1' \
+		"ordinary drift should remain a successful inspection"
+	run_core status --json >"$output"
+	assert_json "$output" \
+		'.managedState.checked == true and .managedState.drifted == false and .managedState.driftCount == 0' \
+		"successful empty inspection should remain clean"
+}
+
+test_doctor_managed_status_failures() {
+	render_suite personal Braden1996
+	new_fixture doctor-managed-status
+	local doctor_home="$temp_root/doctor-home" doctor_fake="$temp_root/doctor-fake"
+	local output="$FIXTURE_ROOT/doctor-output"
+	mkdir -p "$doctor_fake" "$doctor_home/.config/cursor" "$doctor_home/.tmux/plugins/"{tpm,tmux-sensible,tmux}
+	printf 'disable_checkpoint_signature = true\n' >"$doctor_home/.terraformrc"
+	printf 'set -g default-terminal "tmux-256color"\nxterm-ghostty*:RGB:clipboard\n' >"$doctor_home/.tmux.conf"
+	: >"$doctor_home/.config/cursor/extensions.txt"
+	mkdir -p "$doctor_home/.config/mise"
+	: >"$doctor_home/.config/mise/mise.lock"
+	ln -s "$fake_bin/chezmoi" "$doctor_fake/chezmoi"
+	cat >"$doctor_fake/mise" <<'FAKE_MISE'
+#!/bin/bash
+if [[ "${1:-}" == settings ]]; then printf 'false\n'; fi
+exit 0
+FAKE_MISE
+	cat >"$doctor_fake/uname" <<'FAKE_UNAME'
+#!/bin/bash
+printf 'Linux\n'
+FAKE_UNAME
+	cat >"$doctor_fake/ssh-add" <<'FAKE_AGENT'
+#!/bin/bash
+exit 1
+FAKE_AGENT
+	cat >"$doctor_fake/tmux" <<'FAKE_TMUX'
+#!/bin/bash
+printf 'tmux fixture\n'
+FAKE_TMUX
+	printf '#!/bin/bash\nexit 0\n' >"$doctor_fake/infocmp"
+	chmod +x "$doctor_fake"/*
+	local -a doctor_env=(HOME="$doctor_home" PATH="$doctor_fake:/usr/bin:/bin"
+		FAKE_STATE="$fake_state" BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL")
+	env "${doctor_env[@]}" "$RENDER_LIBEXEC/doctor" </dev/null >"$output" 2>&1
+	assert_contains "$output" 'managed files match their target state' "healthy doctor fixture should pass"
+	if env "${doctor_env[@]}" FAKE_CHEZMOI_STATUS_EXIT=9 \
+		"$RENDER_LIBEXEC/doctor" </dev/null >"$output" 2>&1; then
+		fail "doctor must fail when managed-state inspection fails"
+	fi
+	assert_contains "$output" '[xx] could not inspect managed targets; drift is unknown' \
+		"doctor should classify query failure separately from drift"
+	if grep -Fq 'managed files match' "$output"; then
+		fail "doctor must not call failed managed-state inspection clean"
+	fi
+	env "${doctor_env[@]}" FAKE_CHEZMOI_STATUS=$' M .zshrc\n' \
+		"$RENDER_LIBEXEC/doctor" </dev/null >"$output" 2>&1
+	assert_contains "$output" '[!!] chezmoi has unapplied or locally modified targets' \
+		"ordinary drift should remain a warning"
+}
+
 test_update_preserves_dirty_source() {
 	new_fixture update
 	mkdir -p "$FIXTURE_LOCAL/dot_config/mise" "$temp_root/update-home/.config/mise"
@@ -661,6 +749,88 @@ FAKE_UNAME
 		"update should make commit responsibility explicit"
 }
 
+test_update_lookup_failures() {
+	new_fixture update-lookups
+	local update_home="$temp_root/update-lookups-home" update_fake="$temp_root/update-lookups-fake"
+	local output="$FIXTURE_ROOT/update-output" update_bin="$repo_root/dot_local/libexec/braden-dots/executable_update"
+	mkdir -p "$update_fake" "$update_home/.config/homebrew"
+	printf 'brew "fixture-formula"\ncask "fixture-cask"\n' >"$update_home/.config/homebrew/Brewfile"
+	ln -s "$(command -v jq)" "$update_fake/jq"
+	cat >"$update_fake/braden-dots" <<'FAKE_DOTS'
+#!/bin/bash
+exit 0
+FAKE_DOTS
+	cat >"$update_fake/chezmoi" <<'FAKE_CHEZMOI'
+#!/bin/bash
+if [[ "${1:-}" == source-path ]]; then printf '%s\n' "$BRADEN_DOTS_SOURCE"; fi
+FAKE_CHEZMOI
+	cat >"$update_fake/uname" <<'FAKE_UNAME'
+#!/bin/bash
+printf 'Darwin\n'
+FAKE_UNAME
+	cat >"$update_fake/mise" <<'FAKE_MISE'
+#!/bin/bash
+[[ "${1:-}" == outdated ]] || exit 99
+if [[ "${FAKE_MISE_EXIT:-0}" != 0 ]]; then
+	printf 'fixture mise lookup failed\n' >&2
+	exit "$FAKE_MISE_EXIT"
+fi
+printf 'fixture-tool 1.0 -> 1.1\n'
+FAKE_MISE
+	cat >"$update_fake/brew" <<'FAKE_BREW'
+#!/bin/bash
+if [[ "${1:-}" == bundle && "${2:-}" == list ]]; then
+	if [[ "${FAKE_BREW_LIST_EXIT:-0}" != 0 ]]; then exit "$FAKE_BREW_LIST_EXIT"; fi
+	case "$*" in
+	*--formula*) printf 'fixture-formula\n' ;;
+	*--cask*) printf 'fixture-cask\n' ;;
+	esac
+	exit 0
+fi
+[[ "${1:-}" == outdated && "${2:-}" == --json=v2 ]] || exit 99
+case "${FAKE_BREW_RESULT:-current}" in
+current) printf '{"formulae":[],"casks":[]}' ;;
+pending)
+	case "$*" in
+	*--formula*) printf '{"formulae":[{"name":"fixture-formula"}],"casks":[]}' ;;
+	*--cask*) printf '{"formulae":[],"casks":[{"name":"fixture-cask"}]}' ;;
+	esac
+	exit 1
+	;;
+failed) printf 'fixture Homebrew lookup failed\n' >&2; exit 1 ;;
+partial) printf '{"formulae":[],"casks":[]}' ; exit 1 ;;
+malformed) printf '{"formulae":null,"casks":[]}' ;;
+esac
+FAKE_BREW
+	chmod +x "$update_fake/braden-dots" "$update_fake/chezmoi" \
+		"$update_fake/uname" "$update_fake/mise" "$update_fake/brew"
+	local -a update_env=(HOME="$update_home" PATH="$update_fake:/usr/bin:/bin"
+		BRADEN_DOTS_SOURCE="$FIXTURE_LOCAL" BRADEN_DOTS_BIN="$update_fake/braden-dots"
+		BRADEN_DOTS_CHEZMOI="$update_fake/chezmoi" BRADEN_DOTS_MISE="$update_fake/mise")
+	local before result
+	before="$(worktree_fingerprint "$FIXTURE_LOCAL")"
+	env "${update_env[@]}" bash "$update_bin" --check >"$output" 2>&1
+	env "${update_env[@]}" FAKE_BREW_RESULT=pending bash "$update_bin" --check >"$output" 2>&1
+	assert_contains "$output" 'fixture-formula' "pending Homebrew formula should be reported successfully"
+	assert_contains "$output" 'fixture-cask' "pending Homebrew cask should be reported successfully"
+	assert_contains "$output" 'fixture-tool' "pending mise versions should be reported successfully"
+	for result in failed partial malformed; do
+		if env "${update_env[@]}" FAKE_BREW_RESULT="$result" bash "$update_bin" --check >"$output" 2>&1; then
+			fail "Homebrew $result lookup must return nonzero"
+		fi
+		assert_contains "$output" 'Homebrew update lookup failed' "Homebrew lookup failure should be explicit"
+	done
+	if env "${update_env[@]}" FAKE_BREW_LIST_EXIT=7 bash "$update_bin" --check >"$output" 2>&1; then
+		fail "failed managed package listing must return nonzero"
+	fi
+	assert_contains "$output" 'Could not list managed Homebrew dependencies' "package listing failure should be explicit"
+	if env "${update_env[@]}" FAKE_MISE_EXIT=7 bash "$update_bin" --check >"$output" 2>&1; then
+		fail "failed mise lookup must return nonzero"
+	fi
+	assert_contains "$output" 'mise update lookup failed' "mise lookup failure should be explicit"
+	assert_eq "$before" "$(worktree_fingerprint "$FIXTURE_LOCAL")" "lookup checks must not mutate source"
+}
+
 run_test "facade dispatch and stderr-only shims" test_dispatch_and_shims
 run_test "dirty sync preserves worktree and index" test_dirty_sync_preserves_source
 run_test "clean sync handles behind, ahead, and divergence" test_clean_sync_relationships
@@ -668,6 +838,9 @@ run_test "source commit modes and signing" test_commit_modes_and_signing
 run_test "reconcile, continue, and abort" test_reconcile_continue_and_abort
 run_test "publish validation and normal-push guards" test_publish_guards
 run_test "remote selection and structured JSON" test_remote_selection_and_json
+run_test "managed status failure and unknown JSON" test_managed_status_failures
+run_test "doctor distinguishes failed lookup from drift" test_doctor_managed_status_failures
 run_test "update check and dirty-source preservation" test_update_preserves_dirty_source
+run_test "update checks distinguish pending versions from lookup failures" test_update_lookup_failures
 
 printf 'all braden-dots control-plane tests passed\n'

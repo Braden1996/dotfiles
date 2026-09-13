@@ -145,6 +145,13 @@ fi
 cm verify --exclude scripts
 managed_targets=$(cm managed)
 
+# Repository documentation should stay in the source checkout, not be installed
+# into an unrelated docs directory in the user's home.
+if grep -Eq '^docs(/|$)' <<<"$managed_targets" || [[ -e "$home_dir/docs" ]]; then
+	echo "repository documentation must not be installed into the destination home" >&2
+	exit 1
+fi
+
 # Identities come from the vault at runtime, so chezmoi must emit no identity
 # routing of its own: a templated includeIf could only ever encode the one
 # identity the rendering machine happened to know about.

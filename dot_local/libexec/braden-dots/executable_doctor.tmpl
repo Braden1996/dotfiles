@@ -277,8 +277,10 @@ if command -v chezmoi >/dev/null 2>&1; then
     fail "chezmoi doctor reported a problem"
   fi
 
-  chezmoi_status="$(chezmoi status 2>&1)"
-  if [[ -z "$chezmoi_status" ]]; then
+  if ! chezmoi_status="$(chezmoi status 2>&1)"; then
+    fail "could not inspect managed targets; drift is unknown"
+    printf '%s\n' "$chezmoi_status" | indent
+  elif [[ -z "$chezmoi_status" ]]; then
     pass "managed files match their target state"
   else
     warn "chezmoi has unapplied or locally modified targets"

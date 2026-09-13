@@ -89,7 +89,7 @@ jobs:
         run: git diff --exit-code
 
   macos-terminal-smoke:
-    name: macOS Ghostty/tmux smoke
+    name: macOS terminal and native helpers
     runs-on: macos-15
     steps:
       - name: Check out repository
@@ -97,11 +97,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install terminal validators
+      - name: Install validation dependencies
         run: |
-          brew install --formula tmux
+          brew install --formula tmux ripgrep
           brew install --cask ghostty
           command -v tmux
+          command -v rg
           test -x /Applications/Ghostty.app/Contents/MacOS/ghostty
 
       - name: Install mise
@@ -115,6 +116,11 @@ jobs:
 
       - name: Validate rendered terminal configuration
         run: CHEZMOI_BIN="$(mise where chezmoi@2.71.0)/chezmoi" scripts/validate-chezmoi personal
+
+      - name: Test native display and dock helpers without hardware access
+        run: |
+          scripts/test-braden-displays-engine
+          CHEZMOI_BIN="$(mise where chezmoi@2.71.0)/chezmoi" scripts/test-braden-dock
 
       - name: Assert validation did not modify tracked files
         run: git diff --exit-code
