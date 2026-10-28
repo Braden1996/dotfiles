@@ -12,6 +12,10 @@ written to a key file.
 - Personal Mac: `op` authenticates through the 1Password desktop app.
 - Work Mac: `op` uses a vault-scoped service account token kept in the login
   Keychain. Loaded keys expire from the agent after nine hours.
+- Both: GitHub SSH connections (`Match exec` in `~/.ssh/config`) and Git's
+  SSH signing program run `braden-dots identity preflight`, which reloads
+  missing keys and stays silent when they are loaded. After a failed reload it
+  waits five minutes before trying again. `BRADEN_DOTS_PREFLIGHT=0` skips it.
 
 The configured `opVault` is a trust boundary. Personal and work machines should
 use different vaults.
@@ -142,6 +146,12 @@ route and verifies the token’s account before running the requested command.
 Use `--identity <slug>` only when no repository route is available. The legacy
 positional form, `gh <slug> -- ...`, remains accepted.
 
+A verified token is cached in the login Keychain for an hour, so later calls
+skip both 1Password and the account check. `--refresh` rereads the item,
+`identity unload` and `identity sync` drop the cache, and
+`BRADEN_DOTS_GH_TOKEN_TTL` sets its lifetime in seconds (`0` disables it).
+`token-check` always bypasses the cache.
+
 Fine-grained PATs currently do not support every GitHub API, including the
 Checks API. `token-check` covers the read paths used for Actions and pull
 requests, but the requested `gh` operation remains the final permission test.
@@ -151,7 +161,8 @@ requests, but the requested `gh` operation remains the final permission test.
 - Retire one machine by deleting all matching GitHub keys and 1Password items.
 - Retire work access by also disabling its service account.
 - Revocation stops future vault reads. It cannot recall a private key or token
-  already copied into process or agent memory.
+  already copied into process or agent memory, or a GitHub token cached in the
+  Keychain for up to an hour; `identity unload` drops that cache.
 - A service account can exercise every permission granted in every vault it can
   access. Prefer one work vault and service account per machine, grant only the
   required item permissions, and put only credentials made for that machine or

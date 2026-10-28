@@ -45,6 +45,8 @@ mode: revoking the service account revokes the ability to sign.
 	format = ssh
 [gpg "ssh"]
 	allowedSignersFile = ~/.ssh/allowed_signers
+{{- /* Not a pathname setting, so Git would not expand a leading ~. */}}
+	program = {{ joinPath .chezmoi.homeDir ".local/libexec/braden-dots/ssh-sign" }}
 [commit]
 	gpgsign = true
 [tag]

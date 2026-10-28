@@ -32,6 +32,16 @@ vault, because only it knows which identities own credentials.
 */}}
 Include ~/.ssh/config.d/*.conf
 
+{{/*
+Runs while ssh reads this file, before any GitHub connection. Work keys expire
+from the agent, and ssh then reads the .pub IdentityFile as a private key and
+fails with misleading "bad permissions" errors. The preflight reloads expired
+keys instead, silently when they are already loaded, and always exits non-zero
+so this block stays empty. It sits after the Include because an Include inside
+a Match block would become conditional on it. BRADEN_DOTS_PREFLIGHT=0 skips it.
+*/}}
+Match originalhost github.com,github-* exec "{{ joinPath .chezmoi.homeDir ".local/libexec/braden-dots/identity" }} preflight"
+
 Host github.com
   HostName github.com
   User git

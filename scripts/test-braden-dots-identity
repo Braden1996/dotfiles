@@ -57,7 +57,8 @@ assert_not_contains() {
 assert_tokens_not_logged() {
 	local log token_value
 	for log in "$FAKE_STATE/op-calls" "$FAKE_STATE/gh-calls" \
-		"$FAKE_STATE/gh-contexts" "$FAKE_STATE/gh-adds" "$FAKE_STATE/ssh-adds"; do
+		"$FAKE_STATE/gh-contexts" "$FAKE_STATE/gh-adds" "$FAKE_STATE/ssh-adds" \
+		"$FAKE_STATE/security-calls"; do
 		for token_value in \
 			fixture-default-correct \
 			fixture-managed-correct \
@@ -98,6 +99,13 @@ new_case() {
 	: >"$FAKE_STATE/gh-adds"
 	: >"$FAKE_STATE/ssh-adds"
 	: >"$FAKE_STATE/browser-opens"
+	: >"$FAKE_STATE/security-calls"
+	: >"$FAKE_STATE/keychain"
+	# Preflight state must stay inside the case, never the developer's real one.
+	export XDG_STATE_HOME="$FAKE_STATE/state"
+	unset FAKE_AGENT_STATEFUL
+	unset BRADEN_DOTS_GH_TOKEN_TTL
+	unset BRADEN_DOTS_PREFLIGHT
 	unset FAKE_GH_FAIL_TYPE
 	unset FAKE_GH_USER
 	unset FAKE_GH_DENY_REPO
@@ -267,7 +275,14 @@ case "${1:-} ${2:-}" in
 	fi
 	IFS='|' read -r id category title vault public_key email scope username credential <<<"$row"
 	if [[ "$format" == json ]]; then
-		printf '{"id":"%s","title":"%s"}\n' "$id" "$title"
+		# Like op, JSON carries every field value, concealed ones included.
+		jq -cn --arg id "$id" --arg title "$title" \
+			--arg username "$username" --arg credential "$credential" '
+				{id: $id, title: $title, fields: [
+					{id: "username", label: "username", type: "STRING", value: $username},
+					{id: "credential", label: "credential", type: "CONCEALED", value: $credential}
+				]}
+			'
 	elif [[ -n "$field" ]]; then
 		if [[ -n "${FAKE_OP_FAIL_FIELD:-}" && "$field" == "$FAKE_OP_FAIL_FIELD" ]]; then
 			printf 'simulated field read failure: %s\n' "$field" >&2
@@ -533,8 +548,16 @@ cat >"$fake_bin/ssh-add" <<'FAKE_SSH_ADD'
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Stateless by default: every load "expires" at once. FAKE_AGENT_STATEFUL=1
+# keeps what was added, mapping each fake private input back to the public key
+# that seed_item gives the same item.
+agent_keys="$FAKE_STATE/agent-keys"
 case "${1:-}" in
 -l | -L)
+	if [[ "${FAKE_AGENT_STATEFUL:-0}" == 1 && -s "$agent_keys" ]]; then
+		[[ "$1" == -L ]] && cat "$agent_keys"
+		exit 0
+	fi
 	# Exit 1 means the agent is reachable but currently holds no keys.
 	exit 1
 	;;
@@ -549,16 +572,94 @@ for argument in "$@"; do
 	fi
 done
 printf '%s|%s\n' "$arguments" "$payload" >>"$FAKE_STATE/ssh-adds"
+if [[ "${FAKE_AGENT_STATEFUL:-0}" == 1 && "$payload" == test-private-input-for-* ]]; then
+	id=${payload#test-private-input-for-}
+	printf 'ssh-ed25519 TEST-%s %s\n' "$id" "$id" >>"$agent_keys"
+fi
 FAKE_SSH_ADD
 
 cat >"$fake_bin/security" <<'FAKE_SECURITY'
 #!/usr/bin/env bash
 set -uo pipefail
-case "${1:-}" in
+
+# A stateful keychain of service<TAB>account<TAB>password rows. argv is logged
+# so tests can prove that cached credentials never travel through it.
+printf '%s\n' "$*" >>"$FAKE_STATE/security-calls"
+keychain="$FAKE_STATE/keychain"
+touch "$keychain"
+
+parse() {
+	service=""
+	account=""
+	password=""
+	while (($# > 0)); do
+		case "$1" in
+		-s)
+			service=$2
+			shift 2
+			;;
+		-a)
+			account=$2
+			shift 2
+			;;
+		-w)
+			if (($# > 1)) && [[ "$2" != -* ]]; then
+				password=$2
+				shift 2
+			else
+				shift
+			fi
+			;;
+		*) shift ;;
+		esac
+	done
+}
+
+row_number() {
+	awk -F'\t' -v service="$service" -v account="$account" '
+		$1 == service && (account == "" || $2 == account) { print NR; exit }
+	' "$keychain"
+}
+
+command=${1:-}
+[[ $# -gt 0 ]] && shift
+case "$command" in
 find-generic-password)
-	if [[ " $* " == *" -w "* ]]; then
-		printf 'test-service-token\n'
+	parse "$@"
+	row=$(row_number)
+	if [[ -n "$row" ]]; then
+		if [[ " $* " == *" -w "* ]]; then
+			awk -F'\t' -v row="$row" 'NR == row { print $3 }' "$keychain"
+		fi
+		exit 0
 	fi
+	# The 1Password service-account token every rendered helper is configured with.
+	if [[ "$service" == dotfiles-test-token ]]; then
+		[[ " $* " == *" -w "* ]] && printf 'test-service-token\n'
+		exit 0
+	fi
+	exit 44
+	;;
+delete-generic-password)
+	parse "$@"
+	row=$(row_number)
+	[[ -n "$row" ]] || exit 44
+	awk -v row="$row" 'NR != row' "$keychain" >"$keychain.next"
+	mv "$keychain.next" "$keychain"
+	;;
+-i)
+	while IFS= read -r line; do
+		eval "set -- $line"
+		[[ "${1:-}" == add-generic-password ]] || exit 64
+		shift
+		parse "$@"
+		row=$(row_number)
+		if [[ -n "$row" ]]; then
+			awk -v row="$row" 'NR != row' "$keychain" >"$keychain.next"
+			mv "$keychain.next" "$keychain"
+		fi
+		printf '%s\t%s\t%s\n' "$service" "$account" "$password" >>"$keychain"
+	done
 	;;
 *)
 	exit 64
@@ -1394,6 +1495,174 @@ test_status_json_and_expired_key_recovery() {
 		fail "missing default GitHub identity should have a stable issue code"
 }
 
+token_reads() {
+	grep -Fc $'item\tget\tGitHub Machine PAT (ci-work personal)' \
+		"$FAKE_STATE/op-calls" || true
+}
+
+account_checks() {
+	grep -Fxc $'api\tuser\t--jq\t.login' "$FAKE_STATE/gh-calls" || true
+}
+
+test_gh_wrapper_reads_token_once() {
+	new_case gh-single-read
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-correct"
+	export BRADEN_DOTS_GH_TOKEN_TTL=0
+	run_helper "$work_helper" gh personal -- pr create --title test >/dev/null
+
+	assert_eq 1 "$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')" \
+		"a cold gh call should make exactly one 1Password request"
+	assert_not_contains "$FAKE_STATE/op-calls" $'vault\tget' \
+		"a token read should not resolve the vault separately"
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/keychain" | tr -d ' ')" \
+		"a zero cache lifetime must not write the keychain"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_caches_verified_token() {
+	new_case gh-token-cache
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-correct"
+	run_helper "$work_helper" gh personal -- pr create --title one >/dev/null
+	run_helper "$work_helper" gh personal -- pr create --title two >/dev/null
+
+	assert_eq 1 "$(token_reads)" \
+		"a cached token should not be read from 1Password again"
+	assert_eq 1 "$(account_checks)" \
+		"a cached token should not repeat the account check"
+	assert_contains "$FAKE_STATE/gh-calls" $'pr\tcreate\t--title\ttwo' \
+		"a cached token should still run the requested command"
+	if grep -Fvx scoped-correct "$FAKE_STATE/gh-contexts" >/dev/null; then
+		fail "every gh invocation should use the scoped credential"
+	fi
+	assert_contains "$FAKE_STATE/keychain" \
+		$'braden-dots-github-token\tGitHub Machine PAT (ci-work personal) @ Target<>Vault' \
+		"the cache entry should be keyed by token item and vault"
+	assert_tokens_not_logged
+
+	run_helper "$work_helper" gh personal --refresh -- pr create --title three \
+		>/dev/null
+	assert_eq 2 "$(token_reads)" "--refresh should reread 1Password"
+	assert_eq 2 "$(account_checks)" "--refresh should re-verify the account"
+
+	# An entry older than its lifetime is ignored and replaced.
+	awk -F'\t' 'BEGIN { OFS = "\t" } { sub(/^v1 [0-9]+ /, "v1 1 ", $3); print }' \
+		"$FAKE_STATE/keychain" >"$FAKE_STATE/keychain.next"
+	mv "$FAKE_STATE/keychain.next" "$FAKE_STATE/keychain"
+	run_helper "$work_helper" gh personal -- pr create --title four >/dev/null
+	assert_eq 3 "$(token_reads)" "an expired cache entry should be refetched"
+
+	run_helper "$work_helper" unload >/dev/null
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/keychain" | tr -d ' ')" \
+		"unload should drop cached tokens"
+	run_helper "$work_helper" gh personal -- pr create --title five >/dev/null
+	assert_eq 4 "$(token_reads)" "a dropped cache should read 1Password again"
+	assert_tokens_not_logged
+}
+
+test_gh_wrapper_does_not_cache_rejected_token() {
+	new_case gh-cache-rejected
+	seed_item scoped-token "API Credential" \
+		"GitHub Machine PAT (ci-work personal)" "Target<>Vault" \
+		"" "" "" "Braden1996" "fixture-scoped-wrong"
+	if run_helper "$work_helper" gh personal -- pr create --title test \
+		>/dev/null 2>&1; then
+		fail "a wrong-account token should be rejected"
+	fi
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/keychain" | tr -d ' ')" \
+		"a token that failed verification must never be cached"
+}
+
+test_token_check_bypasses_cache() {
+	new_case token-check-cache
+	seed_item default-token "API Credential" \
+		"GitHub Machine PAT (ci-work)" "Target<>Vault" \
+		"" "" "" "default-account" "fixture-default-correct"
+	local repo
+	repo="$FAKE_STATE/repo"
+	git init -q "$repo"
+	# shellcheck disable=SC2088
+	git -C "$repo" config user.signingkey "~/.ssh/id_github_sign.pub"
+	git -C "$repo" remote add origin \
+		git@github.com:Isembard-Mason/mason-os.git
+	run_helper "$work_helper" gh --repo "$repo" -- pr create --title test \
+		>/dev/null
+	run_helper "$work_helper" token-check --repo "$repo" >/dev/null
+	assert_eq 2 "$(grep -Fc $'item\tget\tGitHub Machine PAT (ci-work)' \
+		"$FAKE_STATE/op-calls")" \
+		"token-check should diagnose 1Password rather than the cache"
+	assert_tokens_not_logged
+}
+
+test_preflight_reloads_expired_keys() {
+	new_case preflight
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	run_helper "$work_helper" sync >/dev/null
+	export FAKE_AGENT_STATEFUL=1
+	: >"$FAKE_STATE/op-calls"
+	: >"$FAKE_STATE/ssh-adds"
+
+	local stdout
+	stdout="$FAKE_STATE/preflight.out"
+	if run_helper "$work_helper" preflight >"$stdout" 2>/dev/null; then
+		fail "preflight must always exit non-zero so Match exec never applies"
+	fi
+	assert_eq 0 "$(wc -c <"$stdout" | tr -d ' ')" \
+		"preflight must keep stdout clean for ssh and git"
+	assert_eq 2 "$(wc -l <"$FAKE_STATE/ssh-adds" | tr -d ' ')" \
+		"preflight should reload both expired keys"
+	if awk -F'|' '$1 != "-t 9h -" { exit 1 }' "$FAKE_STATE/ssh-adds"; then
+		:
+	else
+		fail "preflight should preserve the nine-hour work-key expiry"
+	fi
+
+	: >"$FAKE_STATE/op-calls"
+	run_helper "$work_helper" preflight >/dev/null 2>&1 || true
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')" \
+		"preflight must not reach 1Password while keys are loaded"
+
+	: >"$FAKE_STATE/agent-keys"
+	BRADEN_DOTS_PREFLIGHT=0 run_helper "$work_helper" preflight \
+		>/dev/null 2>&1 || true
+	assert_eq 0 "$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')" \
+		"BRADEN_DOTS_PREFLIGHT=0 should skip the reload"
+	assert_eq 0 "$(find "$XDG_STATE_HOME" -name preflight.lock | wc -l | tr -d ' ')" \
+		"preflight should release its lock"
+}
+
+test_preflight_backs_off_after_failure() {
+	new_case preflight-backoff
+	seed_item base-auth "SSH Key" "GitHub Machine Auth (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-auth base-auth"
+	seed_item base-sign "SSH Key" "GitHub Machine Sign (ci-work)" \
+		"Target<>Vault" "ssh-ed25519 TEST-base-sign base-sign"
+	run_helper "$work_helper" sync >/dev/null
+	: >"$FAKE_STATE/op-calls"
+
+	# The stateless fake agent never keeps a key, so the reload fails.
+	local advice
+	advice="$FAKE_STATE/preflight.err"
+	run_helper "$work_helper" preflight >/dev/null 2>"$advice" || true
+	assert_contains "$advice" "braden-dots identity ensure" \
+		"a failed reload should tell agents what to run"
+	assert_contains "$advice" "do not chmod the .pub files" \
+		"a failed reload should steer agents away from misleading fixes"
+	local reads
+	reads=$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')
+	run_helper "$work_helper" preflight >/dev/null 2>"$advice" || true
+	assert_eq "$reads" "$(wc -l <"$FAKE_STATE/op-calls" | tr -d ' ')" \
+		"a recent failure should not be retried on every connection"
+	assert_contains "$advice" "braden-dots identity ensure" \
+		"a skipped retry should still explain the remedy"
+}
+
 run_test() {
 	local name=$1
 	shift
@@ -1423,6 +1692,12 @@ run_test "gh wrapper resolves repository account" test_gh_wrapper_resolves_repos
 run_test "gh wrapper rejects repository route mismatch" test_gh_wrapper_rejects_repository_route_mismatch
 run_test "gh wrapper rejects default token label mismatch" test_gh_wrapper_rejects_default_token_label_mismatch
 run_test "token-check verifies repository access" test_token_check_verifies_repository_access
+run_test "gh wrapper reads its token in one request" test_gh_wrapper_reads_token_once
+run_test "gh wrapper caches verified tokens" test_gh_wrapper_caches_verified_token
+run_test "gh wrapper never caches a rejected token" test_gh_wrapper_does_not_cache_rejected_token
+run_test "token-check bypasses the token cache" test_token_check_bypasses_cache
+run_test "preflight reloads expired keys" test_preflight_reloads_expired_keys
+run_test "preflight backs off after a failed reload" test_preflight_backs_off_after_failure
 run_test "raw token legacy behavior is isolated" test_raw_token_legacy_and_no_scoped_fallback
 run_test "end-to-end cross-vault workflow" test_end_to_end_cross_vault_workflow
 run_test "load default and identity keypairs" test_loads_default_and_identity_pairs

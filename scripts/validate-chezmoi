@@ -192,6 +192,9 @@ grep -Fq 'IdentityFile ~/.ssh/id_github_auth.pub' "$ssh_config"
 # chezmoi supplies only the Include. Templating them would need to know which
 # identities own credentials, which only the vault knows.
 grep -Fq 'Include ~/.ssh/config.d/*.conf' "$ssh_config"
+# Expired agent keys are reloaded before GitHub connections and signatures.
+grep -Eq '^Match originalhost github\.com,github-\* exec ".*/\.local/libexec/braden-dots/identity preflight"$' "$ssh_config"
+grep -Eq '^[[:space:]]*program = /.*/\.local/libexec/braden-dots/ssh-sign$' "$home_dir/.gitconfig"
 if grep -Eq 'ssh/config\.d' <<<"$managed_targets"; then
 	echo "per-account ssh blocks must not be managed by chezmoi" >&2
 	exit 1
@@ -306,7 +309,8 @@ done
 # Prove the generated config actually parses, rather than only that it contains
 # the right substrings. ssh -G fails on an unknown keyword or bad syntax.
 if command -v ssh >/dev/null 2>&1; then
-	if ! ssh_parse=$(ssh -F "$ssh_config" -G github.com 2>&1); then
+	# -G still runs `Match exec`; the disposable home must never reach 1Password.
+	if ! ssh_parse=$(BRADEN_DOTS_PREFLIGHT=0 ssh -F "$ssh_config" -G github.com 2>&1); then
 		echo "the generated ~/.ssh/config does not parse:" >&2
 		echo "$ssh_parse" >&2
 		exit 1
@@ -582,6 +586,8 @@ for agent_file in "${agent_files[@]}"; do
 	grep -Fq 'braden-dots identity token-check --repo .' "$agent_file"
 	grep -Fq 'braden-dots source publish -m' "$agent_file"
 	grep -Fq 'nine hours' "$agent_file"
+	grep -Fq 'Do not chmod the' "$agent_file"
+	grep -Fq 'gh run list --branch <branch>' "$agent_file"
 done
 
 zed_settings="$home_dir/.config/zed/settings.json"

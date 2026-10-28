@@ -10,7 +10,9 @@ the user has completed `braden-dots config edit`; never infer it from active
 `gh` state.
 {{ end }}
 
-Before GitHub work, inspect the repository-aware, non-secret projection:
+Plain `git` works as usual: GitHub SSH connections and commit signing reload
+expired agent keys on their own. Once per session, or when Git or SSH fails,
+inspect the repository-aware, non-secret projection:
 
 ```sh
 braden-dots identity status --repo . --json
@@ -21,6 +23,14 @@ aliases such as `github-<identity>`; do not guess the alias or rewrite a remote
 to HTTPS to bypass routing. If the status reports `agent_keys_missing`, run
 `braden-dots identity ensure` automatically and inspect status again.
 
+On work machines, managed keys expire from the agent after nine hours. A push
+or signed commit that still fails with `bad permissions` or
+`Permission denied (publickey)` naming a `.pub` file means the agent lost its
+keys and the automatic reload could not run. Run `braden-dots identity ensure`
+and retry. Do not chmod the `.pub` files, rewrite the remote, or disable
+commit signing: public keys are meant to be readable, and the private halves
+exist only in the agent.
+
 For GitHub API work, use the same repository-aware identity resolution instead
 of ambient `gh` authentication:
 
@@ -29,16 +39,19 @@ braden-dots identity gh --repo . -- <gh arguments...>
 ```
 
 This selects the default GitHub account unless the repository's generated
-identity route selects a separate account.
+identity route selects a separate account. The verified token is cached for an
+hour, so repeated calls are cheap; after `Bad credentials`, retry once with
+`identity gh --repo . --refresh -- ...`.
+
+The repository token cannot read check runs, so `gh pr checks` and
+`statusCheckRollup` fail with `Resource not accessible by personal access
+token`. Read CI through Actions instead: `gh run list --branch <branch>`,
+`gh run view <run-id> --log-failed`, or
+`gh api repos/{owner}/{repo}/commits/<sha>/status`.
 
 Use `braden-dots identity token-check --repo .` for non-mutating API credential
 diagnostics. `provision-token` creates or authorizes account access and must
 never be run by an agent without the user's explicit confirmation.
-
-On work machines, managed keys expire from the agent after nine hours. A
-warning about permissive `.pub` files is usually misleading: public keys are
-expected to be readable, while the useful private halves exist only in the
-agent.
 
 Ask for confirmation before authorizing an organisation through GitHub SAML
 SSO. Never expose private keys, vault tokens, secret values, or raw sensitive

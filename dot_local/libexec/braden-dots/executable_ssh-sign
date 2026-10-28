@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Git's gpg.ssh.program. Work keys expire from the ssh-agent, after which
+# `ssh-keygen -Y sign` fails with errors about loading the .pub file that send
+# agents towards disabling signing. Reload expired keys first; verification and
+# every other ssh-keygen use pass straight through.
+case " $* " in
+*" -Y sign "*)
+	"${0%/*}/identity" preflight || :
+	;;
+esac
+exec ssh-keygen "$@"

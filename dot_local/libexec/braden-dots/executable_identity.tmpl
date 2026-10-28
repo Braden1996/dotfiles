@@ -87,6 +87,7 @@ Commands:
   status [--repo PATH] [--json]
                 Report backend, agent, effective author, signing key and SSH route
   ensure        Load managed keys only when the agent does not already hold them
+  preflight     Quietly reload expired keys; run by ssh and Git signing
   test [--repo PATH]
                 Test configured GitHub SSH routes without changing them
   generate      Create this machine's SSH keys inside 1Password
@@ -98,7 +99,9 @@ Commands:
                              [--vault <vault>]
   unload        Drop the loaded keys from the ssh-agent
   gh            Run gh with the verified token for a repository's account
-                gh [--repo PATH | --identity SLUG] -- <gh arguments...>
+                gh [--repo PATH | --identity SLUG] [--refresh] -- <gh arguments...>
+                Verified tokens are cached in the keychain for an hour;
+                --refresh rereads 1Password. `unload` drops the cache.
   token-check   Verify the repository token, account and read access
                 token-check [--repo PATH]
   token         Print a GitHub token from the vault
@@ -132,6 +135,10 @@ file_mode() {
 
 file_owner_uid() {
   stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null
+}
+
+file_mtime() {
+  stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 }
 
 token_file_is_safe() {
@@ -245,6 +252,17 @@ resolve_vault_id() {
   fi
   VAULT_ID="$id"
   printf '%s' "$VAULT_ID"
+}
+
+# Callers use resolve_vault_id inside $(...), where the cached assignment dies
+# with the subshell and every later lookup pays another 1Password round-trip.
+# Commands that make several lookups resolve it once in their own shell first.
+prime_vault_id() {
+  [[ -n "$VAULT_ID" ]] && return 0
+  VAULT_ID="$(resolve_vault_id)" || {
+    VAULT_ID=""
+    return 1
+  }
 }
 
 resolve_item_id() {
@@ -480,22 +498,33 @@ cmd_status_human_base() {
   return "$exit_code"
 }
 
+# `preflight` runs this before every GitHub SSH connection, so it asks the agent
+# once and matches each key with shell builtins instead of a cat, awk and grep
+# per key. The match is the same type-and-body comparison key_body performs.
 managed_key_state() {
   MANAGED_KEY_COUNT=0
   MANAGED_KEY_LOADED_COUNT=0
   DEFAULT_KEYS_PRESENT=1
-  local key_file public_key
+  AGENT_REACHABLE=1
+  local key_file key_type key_data loaded status=0
+  loaded="$(ssh-add -L 2>/dev/null)" || status=$?
+  # 0: keys listed, 1: reachable but empty, 2: no agent, 127: no ssh-add.
+  ((status <= 1)) || AGENT_REACHABLE=0
+  ((status == 0)) || loaded=""
   for key_file in \
     "$AUTH_KEY_FILE" \
     "$SIGN_KEY_FILE" \
     "$SSH_DIR"/id_github_auth_*.pub \
     "$SSH_DIR"/id_github_sign_*.pub; do
-    [[ -e "$key_file" ]] || continue
-    public_key="$(recorded_key "$key_file")"
-    [[ -n "$public_key" ]] || continue
+    [[ -r "$key_file" ]] || continue
+    key_type=""
+    key_data=""
+    read -r key_type key_data _ <"$key_file" || true
+    [[ -n "$key_type" ]] || continue
     MANAGED_KEY_COUNT=$((MANAGED_KEY_COUNT + 1))
-    agent_holds_key "$public_key" &&
+    if [[ -n "$key_data" && "$loaded" == *"$key_type $key_data"* ]]; then
       MANAGED_KEY_LOADED_COUNT=$((MANAGED_KEY_LOADED_COUNT + 1))
+    fi
   done
   [[ -r "$AUTH_KEY_FILE" && -r "$SIGN_KEY_FILE" ]] || DEFAULT_KEYS_PRESENT=0
 
@@ -811,6 +840,79 @@ cmd_ensure() {
     return 1
   fi
   pass "all $MANAGED_KEY_COUNT managed key(s) are loaded"
+}
+
+# Run by ssh (`Match exec` in ~/.ssh/config) and by Git's signing program
+# before either needs a GitHub key. Once work keys outlive their agent
+# lifetime, ssh falls back to reading the .pub IdentityFile as a private key
+# and reports "bad permissions" and "Permission denied (publickey)", which
+# sends agents chasing file modes and remote URLs instead of reloading keys.
+#
+# Everything goes to stderr: ssh discards the command's stdout, and Git's
+# signing program must not print anything else there. The status is always 1
+# so that `Match exec` never applies its (empty) block.
+readonly PREFLIGHT_RETRY_SECONDS=300
+readonly PREFLIGHT_LOCK_SECONDS=120
+
+preflight_advice() {
+  {
+    printf '[!!] braden-dots: GitHub keys are not loaded and could not be reloaded automatically\n'
+    printf '[--] Run: braden-dots identity ensure, then retry.\n'
+    printf '[--] The private keys live only in the ssh-agent: do not chmod the .pub files,\n'
+    printf '[--] rewrite the remote, or disable commit signing.\n'
+  } >&2
+}
+
+cmd_preflight() {
+  [[ "${BRADEN_DOTS_PREFLIGHT:-1}" != 0 ]] || return 1
+  [[ -z "${BRADEN_DOTS_PREFLIGHT_ACTIVE:-}" ]] || return 1
+  managed_key_state
+  ((AGENT_REACHABLE == 1)) || return 1
+  ((MANAGED_KEY_COUNT > 0 && MANAGED_KEYS_LOADED == 0)) || return 1
+
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/braden-dots"
+  local lock failed age waited=0
+  lock="$state_dir/preflight.lock"
+  failed="$state_dir/preflight.failed"
+  mkdir -p "$state_dir" 2>/dev/null || return 1
+
+  # A failed reload (offline, a revoked service account, a dismissed 1Password
+  # prompt) is not retried on every connection a fetch loop makes.
+  if [[ -e "$failed" ]]; then
+    age=$(($(date +%s) - $(file_mtime "$failed" || echo 0)))
+    if ((age < PREFLIGHT_RETRY_SECONDS)); then
+      preflight_advice
+      return 1
+    fi
+  fi
+
+  # Parallel fetches would otherwise each stream the keys from 1Password. One
+  # process loads them; the others wait for it and then re-check.
+  until mkdir "$lock" 2>/dev/null; do
+    age=$(($(date +%s) - $(file_mtime "$lock" || echo 0)))
+    if ((age > PREFLIGHT_LOCK_SECONDS)); then
+      rmdir "$lock" 2>/dev/null
+      continue
+    fi
+    ((waited < 60)) || return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+  # shellcheck disable=SC2064 # Expand now: $lock is local to this function.
+  trap "rmdir '$lock' 2>/dev/null" EXIT
+
+  managed_key_state
+  if ((MANAGED_KEYS_LOADED == 0)); then
+    export BRADEN_DOTS_PREFLIGHT_ACTIVE=1
+    printf '[--] braden-dots: GitHub keys are not in the ssh-agent; reloading them\n' >&2
+    if cmd_ensure >&2; then
+      rm -f -- "$failed"
+    else
+      touch "$failed"
+      preflight_advice
+    fi
+  fi
+  return 1
 }
 
 test_ssh_host() {
@@ -1203,6 +1305,9 @@ cmd_sync() {
   require_command op || return 1
   require_vault || return 1
   require_safe_machine || return 1
+  prime_vault_id || return 1
+  # Sync re-reads the vault as the source of truth; cached tokens may predate it.
+  clear_token_cache
 
   local auth_key sign_key
   auth_key="$(read_public_key "$AUTH_ITEM")"
@@ -1864,6 +1969,7 @@ cmd_sync_identities() {
   require_command op || return 1
   require_command jq || return 1
   require_vault || return 1
+  prime_vault_id || return 1
 
   local items rows
   if ! items="$(vault_items_json)"; then
@@ -2148,6 +2254,7 @@ cmd_sync_signers() {
   require_command jq || return 1
   require_vault || return 1
   require_safe_machine || return 1
+  prime_vault_id || return 1
 
   if ! valid_email "$DEFAULT_EMAIL"; then
     fail "default email is not a safe SSH signing principal: $DEFAULT_EMAIL"
@@ -2312,6 +2419,7 @@ cmd_load() {
     fail "no ssh-agent is reachable; cannot load keys"
     return 1
   fi
+  prime_vault_id || return 1
 
   local items identity_rows_data
   if ! items="$(vault_items_json)"; then
@@ -2435,6 +2543,9 @@ cmd_unload() {
     fi
   done
 
+  # Unloading means "this session holds no GitHub credentials", tokens included.
+  clear_token_cache
+
   if (( failed > 0 )); then
     return 1
   fi
@@ -2483,70 +2594,160 @@ cmd_store_token() {
   fi
 }
 
-resolve_token_item_id() {
-  local title="$1" token_item_id
-  if ! token_item_id="$(resolve_item_id "$title")" || [[ -z "$token_item_id" ]]; then
-    fail "could not find $title in $VAULT"
+# One `op item get` returns the username and the credential together. Reading
+# them separately took six 1Password round-trips per call (three of them
+# re-resolving the vault inside subshells), roughly five seconds before gh even
+# started. The vault is passed by name: --vault accepts any name, unlike the
+# secret references that need IDs.
+#
+# The item JSON is piped straight into jq rather than held in a variable and
+# fed through a here-string, which bash 3.2 backs with a temporary file. jq
+# validates both values, so only whitespace-free values reach the shell and a
+# tab can separate them.
+fetch_token_item() {
+  local title="$1" user_policy="${2:-required-user}" fields tab=$'\t'
+  FETCHED_TOKEN=""
+  FETCHED_TOKEN_USER=""
+  if ! fields="$(
+    op_run item get "$title" --vault "$VAULT" --format json 2>/dev/null |
+      jq -r --arg user "$TOKEN_USER_FIELD" --arg token "$TOKEN_FIELD" '
+        def field($label):
+          ([.fields[]? | select(.label == $label) | .value // ""] | first) // "";
+        field($user) as $u | field($token) as $t |
+        if ($u | test("\\s")) then "user_whitespace"
+        elif $t == "" then "missing_token"
+        elif ($t | test("\\s")) then "token_whitespace"
+        else "ok\t\($u)\t\($t)" end
+      '
+  )" || [[ -z "$fields" ]]; then
+    fail "could not read $title from $VAULT"
     return 1
   fi
-  printf '%s' "$token_item_id"
-}
-
-read_token_credential() {
-  local token_item_id="$1" title="$2" token_reference token
-  token_reference="$(reference "$token_item_id" "$TOKEN_FIELD")" || return 1
-  if ! token="$(op_run read --no-newline "$token_reference")"; then
-    fail "could not read $TOKEN_FIELD from $title in $VAULT"
-    return 1
-  fi
-  if [[ -z "$token" ]]; then
-    fail "$TOKEN_FIELD is empty in $title"
-    return 1
-  fi
-  if [[ "$token" == *[[:space:]]* ]]; then
-    fail "$TOKEN_FIELD contains whitespace in $title"
-    return 1
-  fi
-  printf '%s' "$token"
-}
-
-read_token_username() {
-  local token_item_id="$1" title="$2" vault_id username
-  vault_id="$(resolve_vault_id)" || return 1
-  if ! username="$(
-    op_run item get "$token_item_id" \
-      --vault "$vault_id" \
-      --fields label="$TOKEN_USER_FIELD" \
-      --reveal 2>/dev/null
-  )" || [[ -z "$username" ]]; then
+  case "$fields" in
+    ok"$tab"*) ;;
+    user_whitespace)
+      fail "$TOKEN_USER_FIELD contains whitespace in $title"
+      return 1
+      ;;
+    missing_token)
+      fail "$TOKEN_FIELD is empty in $title"
+      return 1
+      ;;
+    *)
+      fail "$TOKEN_FIELD contains whitespace in $title"
+      return 1
+      ;;
+  esac
+  fields="${fields#ok"$tab"}"
+  if [[ "$user_policy" == required-user && "$fields" == "$tab"* ]]; then
     fail "could not read $TOKEN_USER_FIELD from $title in $VAULT"
     return 1
   fi
-  if [[ "$username" == *[[:space:]]* ]]; then
-    fail "$TOKEN_USER_FIELD contains whitespace in $title"
-    return 1
-  fi
-  printf '%s' "$username"
+  FETCHED_TOKEN_USER="${fields%%"$tab"*}"
+  FETCHED_TOKEN="${fields#*"$tab"}"
 }
 
+# Verified tokens are kept briefly in the login keychain so that repeated
+# `identity gh` calls skip 1Password and the account check entirely. The
+# keychain already holds the service-account token, which can read every key in
+# the vault, so a narrower PAT beside it adds no new exposure; the lifetime
+# bounds how long a rotated or revoked item keeps being used. `unload`, `sync`
+# and `gh --refresh` drop it, and BRADEN_DOTS_GH_TOKEN_TTL=0 disables it.
+readonly TOKEN_CACHE_SERVICE="braden-dots-github-token"
+TOKEN_CACHE_TTL="${BRADEN_DOTS_GH_TOKEN_TTL:-3600}"
+[[ "$TOKEN_CACHE_TTL" =~ ^[0-9]+$ ]] || TOKEN_CACHE_TTL=0
+
+token_cache_enabled() {
+  ((TOKEN_CACHE_TTL > 0)) && command -v security >/dev/null 2>&1
+}
+
+token_cache_account() {
+  printf '%s @ %s' "$1" "$VAULT"
+}
+
+read_cached_token() {
+  local title="$1" configured_user="$2" account entry stamp user token now
+  token_cache_enabled || return 1
+  account="$(token_cache_account "$title")"
+  entry="$(
+    security find-generic-password \
+      -a "$account" -s "$TOKEN_CACHE_SERVICE" -w 2>/dev/null
+  )" || return 1
+  [[ "$entry" == "v1 "* ]] || return 1
+  entry="${entry#v1 }"
+  stamp="${entry%% *}"
+  entry="${entry#* }"
+  user="${entry%% *}"
+  token="${entry#* }"
+  [[ "$stamp" =~ ^[0-9]+$ ]] || return 1
+  [[ "$user" =~ ^[A-Za-z0-9_-]+$ && "$token" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  now="$(date +%s)"
+  ((now >= stamp && now - stamp < TOKEN_CACHE_TTL)) || return 1
+  if [[ -n "$configured_user" ]] &&
+    [[ "$(tr '[:upper:]' '[:lower:]' <<<"$configured_user")" != \
+      "$(tr '[:upper:]' '[:lower:]' <<<"$user")" ]]; then
+    return 1
+  fi
+  VERIFIED_TOKEN="$token"
+  VERIFIED_TOKEN_USER="$user"
+}
+
+cache_verified_token() {
+  local title="$1" account
+  token_cache_enabled || return 0
+  account="$(token_cache_account "$title")"
+  # Everything below is interpolated into one `security -i` command line, so
+  # refuse anything that could break out of its double quotes.
+  [[ "$VERIFIED_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  [[ "$VERIFIED_TOKEN_USER" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  [[ "$account" != *[\"\\]* ]] || return 0
+  # `security -i` reads the command from stdin, which keeps the token out of
+  # argv and therefore out of `ps`. printf is a builtin, so no process other
+  # than security ever receives it.
+  printf 'add-generic-password -U -a "%s" -s "%s" -l "%s" -w "v1 %s %s %s"\n' \
+    "$account" "$TOKEN_CACHE_SERVICE" "braden-dots: $title" \
+    "$(date +%s)" "$VERIFIED_TOKEN_USER" "$VERIFIED_TOKEN" |
+    security -i >/dev/null 2>&1 || true
+}
+
+clear_token_cache() {
+  command -v security >/dev/null 2>&1 || return 0
+  local cleared=0
+  while ((cleared < 100)) &&
+    security delete-generic-password -s "$TOKEN_CACHE_SERVICE" >/dev/null 2>&1; do
+    cleared=$((cleared + 1))
+  done
+  if ((cleared > 0)); then
+    note "dropped $cleared cached GitHub token(s)"
+  fi
+}
+
+# cache_mode: `use` reads and refills the cache, `refresh` skips the read but
+# refills it, and `bypass` touches neither.
 load_verified_token() {
-  local title="$1" configured_user="$2"
-  local token_item_id expected_user actual_user
+  local title="$1" configured_user="$2" cache_mode="${3:-use}"
+  local expected_user actual_user
   local normalized_configured normalized_expected normalized_actual
 
   VERIFIED_TOKEN=""
   VERIFIED_TOKEN_USER=""
-  token_item_id="$(resolve_token_item_id "$title")" || return 1
-  expected_user="$(read_token_username "$token_item_id" "$title")" || return 1
+  if [[ "$cache_mode" == use ]] &&
+    read_cached_token "$title" "$configured_user"; then
+    return 0
+  fi
+  fetch_token_item "$title" || return 1
+  expected_user="$FETCHED_TOKEN_USER"
   normalized_configured="$(tr '[:upper:]' '[:lower:]' <<<"$configured_user")"
   normalized_expected="$(tr '[:upper:]' '[:lower:]' <<<"$expected_user")"
   if [[ -n "$configured_user" ]] &&
     [[ "$normalized_configured" != "$normalized_expected" ]]; then
     fail "$title is labeled for '$expected_user', but github.com is configured for '$configured_user'"
+    FETCHED_TOKEN=""
     return 1
   fi
 
-  VERIFIED_TOKEN="$(read_token_credential "$token_item_id" "$title")" || return 1
+  VERIFIED_TOKEN="$FETCHED_TOKEN"
+  FETCHED_TOKEN=""
   if ! actual_user="$(
     GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com gh api user --jq .login 2>/dev/null
   )" || [[ -z "$actual_user" ]]; then
@@ -2561,6 +2762,7 @@ load_verified_token() {
     return 1
   fi
   VERIFIED_TOKEN_USER="$actual_user"
+  [[ "$cache_mode" == bypass ]] || cache_verified_token "$title"
 }
 
 cmd_token() {
@@ -2599,9 +2801,10 @@ cmd_token() {
     title="$(account_item_title token "$MACHINE" "$slug")"
   fi
 
-  local token_item_id
-  token_item_id="$(resolve_token_item_id "$title")" || return 1
-  read_token_credential "$token_item_id" "$title"
+  # The legacy unsuffixed item predates the username field.
+  fetch_token_item "$title" optional-user || return 1
+  printf '%s' "$FETCHED_TOKEN"
+  FETCHED_TOKEN=""
 }
 
 cmd_token_check() {
@@ -2647,7 +2850,9 @@ cmd_token_check() {
     fail "could not derive owner/repo from the repository remote"
     return 1
   fi
-  load_verified_token "$RESOLVED_TOKEN_TITLE" "$RESOLVED_GITHUB_USER" || return 1
+  # A diagnostic must exercise 1Password and GitHub, not the cache.
+  load_verified_token "$RESOLVED_TOKEN_TITLE" "$RESOLVED_GITHUB_USER" bypass ||
+    return 1
   pass "token authenticates as the expected GitHub account: $VERIFIED_TOKEN_USER"
 
   if ! GH_TOKEN="$VERIFIED_TOKEN" GH_HOST=github.com \
@@ -2681,13 +2886,17 @@ cmd_token_check() {
 }
 
 cmd_gh() {
-  local repo="." slug="" selector="" separator=0
+  local repo="." slug="" selector="" separator=0 refresh=0
   while (($# > 0)); do
     case "$1" in
       --)
         separator=1
         shift
         break
+        ;;
+      --refresh)
+        refresh=1
+        shift
         ;;
       --repo)
         if [[ -n "$selector" || $# -lt 2 || -z "$2" ]]; then
@@ -2726,7 +2935,7 @@ cmd_gh() {
         shift
         ;;
       -h | --help)
-        note "usage: braden-dots identity gh [--repo PATH | --identity SLUG] --"
+        note "usage: braden-dots identity gh [--repo PATH | --identity SLUG] [--refresh] --"
         note "       <gh arguments...>"
         return 0
         ;;
@@ -2778,7 +2987,9 @@ cmd_gh() {
     configured_user="$RESOLVED_GITHUB_USER"
   fi
 
-  load_verified_token "$title" "$configured_user" || return 1
+  local cache_mode=use
+  ((refresh == 1)) && cache_mode=refresh
+  load_verified_token "$title" "$configured_user" "$cache_mode" || return 1
 
   # A non-empty GH_TOKEN takes precedence over gh's stored login. Pinning the
   # host and validating the token's account before the requested command makes
@@ -2799,6 +3010,7 @@ main() {
     store-token) cmd_store_token ;;
     status) cmd_status "$@" ;;
     ensure) cmd_ensure "$@" ;;
+    preflight) cmd_preflight ;;
     test) cmd_test "$@" ;;
     generate) cmd_generate "$@" ;;
     publish) cmd_publish "$@" ;;
